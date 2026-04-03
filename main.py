@@ -23,33 +23,38 @@ def generate_post():
     today = datetime.datetime.now().strftime("%B %d, %Y")
     message = client.messages.create(
         model="claude-sonnet-4-20250514",
-        max_tokens=1500,
+        max_tokens=2000,
         messages=[{
             "role": "user",
-            "content": f"""Write a blog post for today ({today}) about AI tools or tips to make or save money.
-            
-Requirements:
-- Title: catchy and SEO friendly
-- Length: 800-1000 words
-- Tone: friendly, practical, actionable
-- Only mention REAL existing AI tools such as ChatGPT, Claude, Gemini, Jasper, Descript, Canva AI, Midjourney, Notion AI, Copy.ai, or Grammarly
-- Do NOT invent fake tools, fake statistics, or fake user stories
-- Do NOT use made-up names or fictional products
-- Include 3 specific tips using real tool names
-- All statistics must be realistic and from known sources or clearly stated as estimates
-- End with a call to action encouraging readers to try one tool today
-- Format: HTML with proper h2, h3, p tags
-- Add relevant emojis to headings to make it engaging
+            "content": f"""Write a complete blog post for today ({today}) about AI tools or tips to make or save money.
 
-Return in this exact format:
+Requirements:
+- Title: catchy, specific, SEO friendly (include year 2026)
+- Length: exactly 900-1000 words, NO cutting off mid-sentence
+- Tone: friendly, conversational, practical
+- Only mention REAL existing AI tools: ChatGPT, Claude, Gemini, Jasper, Descript, Canva AI, Midjourney, Notion AI, Copy.ai, Grammarly
+- Do NOT invent fake tools, fake statistics, or fake user stories
+- Structure: intro, 3 main strategies, bonus tips, strong conclusion
+- Every section must be fully completed
+- End with a complete call to action paragraph
+- Add emojis to headings
+- Format: clean HTML with h2, h3, p, ul, li tags
+- Include a meta description line at the very start
+
+Return in this EXACT format with no extra text:
 TITLE: [your title here]
-CONTENT: [your html content here]"""
+DESCRIPTION: [one sentence meta description]
+CONTENT: [your complete html content here]"""
         }]
     )
     response = message.content[0].text
-    title = response.split("TITLE:")[1].split("CONTENT:")[0].strip()
+    title = response.split("TITLE:")[1].split("DESCRIPTION:")[0].strip()
+    description = response.split("DESCRIPTION:")[1].split("CONTENT:")[0].strip()
     content = response.split("CONTENT:")[1].strip()
-    return title, content
+    
+    # Add meta description to content
+    full_content = f'<meta name="description" content="{description}">\n{content}'
+    return title, full_content
 
 def post_to_blogger(title, content):
     access_token = get_access_token()
@@ -59,7 +64,8 @@ def post_to_blogger(title, content):
     }
     data = {
         "title": title,
-        "content": content
+        "content": content,
+        "labels": ["AI Tools", "Make Money", "Side Hustle", "Passive Income", "AI"]
     }
     response = requests.post(
         f"https://www.googleapis.com/blogger/v3/blogs/{BLOG_ID}/posts/",
