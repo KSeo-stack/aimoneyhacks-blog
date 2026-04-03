@@ -20,19 +20,22 @@ def get_access_token():
     return response.json()["access_token"]
 
 def get_unsplash_image(keyword):
-    response = requests.get(
-        "https://api.unsplash.com/search/photos",
-        params={
-            "query": keyword,
-            "per_page": 1,
-            "orientation": "landscape"
-        },
-        headers={"Authorization": f"Client-ID {UNSPLASH_ACCESS_KEY}"}
-    )
-    data = response.json()
-    if data["results"]:
-        img = data["results"][0]
-        return img["urls"]["regular"], img["user"]["name"], img["links"]["html"]
+    try:
+        response = requests.get(
+            "https://api.unsplash.com/search/photos",
+            params={
+                "query": keyword,
+                "per_page": 1,
+                "orientation": "landscape"
+            },
+            headers={"Authorization": f"Client-ID {UNSPLASH_ACCESS_KEY}"}
+        )
+        data = response.json()
+        if "results" in data and len(data["results"]) > 0:
+            img = data["results"][0]
+            return img["urls"]["regular"], img["user"]["name"], img["links"]["html"]
+    except Exception as e:
+        print(f"Image fetch failed: {e}")
     return None, None, None
 
 def generate_post():
