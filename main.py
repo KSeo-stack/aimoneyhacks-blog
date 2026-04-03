@@ -30,6 +30,9 @@ def get_unsplash_image(keyword):
             },
             headers={"Authorization": f"Client-ID {UNSPLASH_ACCESS_KEY}"}
         )
+        print(f"Unsplash status: {response.status_code}")
+        print(f"Unsplash key used: {UNSPLASH_ACCESS_KEY[:10] if UNSPLASH_ACCESS_KEY else 'NONE'}")
+        print(f"Unsplash response: {response.text[:200]}")
         data = response.json()
         if "results" in data and len(data["results"]) > 0:
             img = data["results"][0]
