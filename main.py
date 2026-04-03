@@ -108,4 +108,5 @@ def post_to_blogger(title, content):
 if __name__ == "__main__":
     title, content = generate_post()
     result = post_to_blogger(title, content)
+    print(f"Full result: {result}")
     print(f"Posted: {result.get('url', 'Check your blog!')}")
