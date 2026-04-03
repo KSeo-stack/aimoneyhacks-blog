@@ -32,9 +32,14 @@ Requirements:
 - Title: catchy and SEO friendly
 - Length: 800-1000 words
 - Tone: friendly, practical, actionable
-- Include: 3 specific tips or tools
-- End with a call to action
+- Only mention REAL existing AI tools such as ChatGPT, Claude, Gemini, Jasper, Descript, Canva AI, Midjourney, Notion AI, Copy.ai, or Grammarly
+- Do NOT invent fake tools, fake statistics, or fake user stories
+- Do NOT use made-up names or fictional products
+- Include 3 specific tips using real tool names
+- All statistics must be realistic and from known sources or clearly stated as estimates
+- End with a call to action encouraging readers to try one tool today
 - Format: HTML with proper h2, h3, p tags
+- Add relevant emojis to headings to make it engaging
 
 Return in this exact format:
 TITLE: [your title here]
