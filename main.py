@@ -16,6 +16,7 @@ def get_wp_token():
             "client_id": WP_CLIENT_ID,
             "client_secret": WP_CLIENT_SECRET,
             "grant_type": "client_credentials",
+            "blog": WP_SITE,
         }
     )
     print(f"Token response: {response.status_code}")
