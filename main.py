@@ -5,7 +5,7 @@ import os
 
 CLAUDE_API_KEY = os.environ.get("CLAUDE_API_KEY")
 WP_ACCESS_TOKEN = os.environ.get("WP_ACCESS_TOKEN")
-WP_SITE = "aimoneyhacksblog.wordpress.com"
+WP_SITE = "cashgpt00.gumroad.com/l/izbis"
 PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY")
 
 def get_pexels_image(keyword):
