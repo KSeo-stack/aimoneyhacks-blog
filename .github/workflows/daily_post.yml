@@ -2,8 +2,8 @@ name: Daily Blog Post
 
 on:
   schedule:
-    - cron: '0 1 * * *'  # 매일 한국시간 오전 10시
-  workflow_dispatch:  # 수동 실행도 가능
+    - cron: '0 1 * * *'
+  workflow_dispatch:
 
 jobs:
   post:
@@ -26,5 +26,4 @@ jobs:
           BLOGGER_CLIENT_SECRET: ${{ secrets.BLOGGER_CLIENT_SECRET }}
           BLOGGER_REFRESH_TOKEN: ${{ secrets.BLOGGER_REFRESH_TOKEN }}
           BLOG_ID: ${{ secrets.BLOG_ID }}
-          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
         run: python main.py
