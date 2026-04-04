@@ -22,7 +22,6 @@ jobs:
       - name: Run blog post
         env:
           CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
-          WP_CLIENT_ID: ${{ secrets.WP_CLIENT_ID }}
-          WP_CLIENT_SECRET: ${{ secrets.WP_CLIENT_SECRET }}
+          WP_ACCESS_TOKEN: ${{ secrets.WP_ACCESS_TOKEN }}
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
         run: python main.py
