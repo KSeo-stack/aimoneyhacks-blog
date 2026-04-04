@@ -5,7 +5,7 @@ import os
 
 CLAUDE_API_KEY = os.environ.get("CLAUDE_API_KEY")
 WP_ACCESS_TOKEN = os.environ.get("WP_ACCESS_TOKEN")
-WP_SITE = "cashgpt00.gumroad.com/l/izbis"
+WP_SITE = "aimoneyhacksblog.wordpress.com"
 PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY")
 
 def get_pexels_image(keyword):
@@ -46,7 +46,7 @@ def generate_post():
         image_html = '<div style="margin-bottom:24px;"><img src="' + img_url + '" alt="' + title + '" style="width:100%;border-radius:8px;"/><p style="font-size:12px;color:#888;">Photo by <a href="' + photo_link + '" target="_blank">' + photographer + '</a> on <a href="https://www.pexels.com" target="_blank">Pexels</a></p></div>'
         content = image_html + content
 
-    cta = '<div style="background:#f0f7ff;border-left:4px solid #0066cc;padding:20px;margin-top:32px;border-radius:8px;"><h3>Want 100 AI Prompts to Make Money Online?</h3><p>Get our complete prompt pack with 100 copy-paste prompts to earn online with AI.</p><a href="https://aimoneyhacks8.gumroad.com/l/izbis" style="background:#0066cc;color:white;padding:10px 20px;border-radius:6px;text-decoration:none;font-weight:bold;">Get the Prompt Pack</a></div>'
+    cta = '<div style="background:#f0f7ff;border-left:4px solid #0066cc;padding:20px;margin-top:32px;border-radius:8px;"><h3>Want 100 AI Prompts to Make Money Online?</h3><p>Get our complete prompt pack with 100 copy-paste prompts to earn online with AI.</p><a href="https://cashgpt00.gumroad.com/l/izbis" style="background:#0066cc;color:white;padding:10px 20px;border-radius:6px;text-decoration:none;font-weight:bold;">Get the Prompt Pack</a></div>'
     content = content + cta
     return title, content, description
 
