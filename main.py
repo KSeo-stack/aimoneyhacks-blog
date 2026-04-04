@@ -4,24 +4,9 @@ import datetime
 import os
 
 CLAUDE_API_KEY = os.environ.get("CLAUDE_API_KEY")
-WP_CLIENT_ID = os.environ.get("WP_CLIENT_ID")
-WP_CLIENT_SECRET = os.environ.get("WP_CLIENT_SECRET")
+WP_ACCESS_TOKEN = os.environ.get("WP_ACCESS_TOKEN")
 WP_SITE = "aimoneyhacksblog.wordpress.com"
 PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY")
-
-def get_wp_token():
-    response = requests.post(
-        "https://public-api.wordpress.com/oauth2/token",
-        data={
-            "client_id": WP_CLIENT_ID,
-            "client_secret": WP_CLIENT_SECRET,
-            "grant_type": "client_credentials",
-            "blog": WP_SITE,
-        }
-    )
-    print(f"Token response: {response.status_code}")
-    print(f"Token body: {response.text[:200]}")
-    return response.json().get("access_token")
 
 def get_pexels_image(keyword):
     try:
@@ -66,13 +51,8 @@ def generate_post():
     return title, content, description
 
 def post_to_wordpress(title, content, description):
-    token = get_wp_token()
-    if not token:
-        print("Failed to get token!")
-        return {}
-
     headers = {
-        "Authorization": "Bearer " + token,
+        "Authorization": "Bearer " + WP_ACCESS_TOKEN,
         "Content-Type": "application/json"
     }
     data = {
