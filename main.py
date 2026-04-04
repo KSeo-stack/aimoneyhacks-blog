@@ -2,7 +2,6 @@ import anthropic
 import requests
 import datetime
 import os
-import json
 
 CLAUDE_API_KEY = os.environ.get("CLAUDE_API_KEY")
 WP_CLIENT_ID = os.environ.get("WP_CLIENT_ID")
@@ -76,16 +75,33 @@ CONTENT: [your complete html content here]"""
 
     img_url, photographer, photo_link = get_pexels_image(keyword)
     if img_url:
-        image_html = f'''
-<div style="margin-bottom: 24px;">
-  <img src="{img_url}" alt="{title}" style="width:100%; border-radius:8px;"/>
-  <p style="font-size:12px; color:#888;">Photo by <a href="{photo_link}" target="_blank">{photographer}</a> on <a href="https://www.pexels.com" target="_blank">Pexels</a></p>
-</div>
-'''
+        image_html = (
+            '<div style="margin-bottom: 24px;">'
+            f'<img src="{img_url}" alt="{title}" style="width:100%; border-radius:8px;"/>'
+            f'<p style="font-size:12px; color:#888;">Photo by <a href="{photo_link}" target="_blank">{photographer}</a> on <a href="https://www.pexels.com" target="_blank">Pexels</a></p>'
+            "</div>"
+        )
         content = image_html + content
 
-    # Add Gumroad CTA at bottom
-    cta = '''
-<div style="background:#f0f7ff; border-left:4px solid #0066cc; padding:20px; margin-top:32px; border-radius:8px;">
-  <h3 style="margin:0 0 8px;">💸 Want 100 AI Prompts to Make Money Online?</h3>
-  <p style="margin:0
+    cta = (
+        '<div style="background:#f0f7ff; border-left:4px solid #0066cc; padding:20px; margin-top:32px; border-radius:8px;">'
+        "<h3>Want 100 AI Prompts to Make Money Online?</h3>"
+        "<p>Get our complete prompt pack with 100 copy-paste prompts to earn online with AI.</p>"
+        '<a href="https://aimoneyhacks8.gumroad.com/l/izbis" style="background:#0066cc; color:white; padding:10px 20px; border-radius:6px; text-decoration:none; font-weight:bold;">Get the Prompt Pack</a>'
+        "</div>"
+    )
+    content = content + cta
+    return title, content, description
+
+def post_to_wordpress(title, content, description):
+    token = get_wp_token()
+    if not token:
+        print("Failed to get token!")
+        return
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "title​​​​​​​​​​​​​​​​
