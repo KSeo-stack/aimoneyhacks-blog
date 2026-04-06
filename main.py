@@ -2,7 +2,6 @@ import anthropic
 import requests
 import datetime
 import os
-import random
 
 CLAUDE_API_KEY = os.environ.get("CLAUDE_API_KEY")
 WP_ACCESS_TOKEN = os.environ.get("WP_ACCESS_TOKEN")
@@ -91,7 +90,7 @@ def generate_post():
         max_tokens=2000,
         messages=[{
             "role": "user",
-            "content": "Write a complete blog post for today (" + today + ") about: " + topic + "\n\n" + fmt + "\n\nRequirements:\n- Title: catchy, specific, SEO friendly (include year 2026)\n- Length: exactly 900-1000 words, NO cutting off mid-sentence\n- Tone: friendly, conversational, practical, engaging\n- Only mention REAL existing AI tools: ChatGPT, Claude, Gemini, Jasper, Descript, Canva AI, Midjourney, Notion AI, Copy.ai, Grammarly\n- Do NOT invent fake tools or fake statistics\n- If using case studies or examples, clearly frame them as hypothetical scenarios using phrases like 'imagine someone like...' or 'let us say you are...' rather than presenting them as real people\n- Avoid generic advice - be specific and actionable\n- Every section must be fully completed\n- End with a strong call to action\n- Add emojis to headings\n- Format: clean HTML with h2, h3, p, ul, li tags\n\nReturn in this EXACT format with no extra text:\nTITLE: [your title here]\nKEYWORD: [one word image search keyword]\nDESCRIPTION: [one sentence meta description]\nCONTENT: [your complete html content here]"
+            "content": "Write a complete blog post for today (" + today + ") about: " + topic + "\n\n" + fmt + "\n\nRequirements:\n- Title: catchy, specific, SEO friendly (include year 2026)\n- Length: exactly 900-1000 words, NO cutting off mid-sentence\n- Tone: friendly, conversational, practical, engaging\n- Only mention REAL existing AI tools: ChatGPT, Claude, Gemini, Jasper, Descript, Canva AI, Midjourney, Notion AI, Copy.ai, Grammarly\n- Do NOT invent fake tools or fake statistics\n- Do NOT use specific unverifiable numbers or percentages (avoid claims like '400% increase' or '$18,400 saved' - use general language like 'significantly reduced' or 'noticeably faster' instead)\n- If using case studies or examples, clearly frame them as hypothetical scenarios using phrases like 'imagine someone like...' or 'let us say you are...' rather than presenting them as real people\n- Avoid generic advice - be specific and actionable\n- Every section must be fully completed\n- End with a strong call to action\n- Add emojis to headings\n- Format: clean HTML with h2, h3, p, ul, li tags\n\nReturn in this EXACT format with no extra text:\nTITLE: [your title here]\nKEYWORD: [one word image search keyword]\nDESCRIPTION: [one sentence meta description]\nCONTENT: [your complete html content here]"
         }]
     )
     response = message.content[0].text
