@@ -2,11 +2,70 @@ import anthropic
 import requests
 import datetime
 import os
+import random
 
 CLAUDE_API_KEY = os.environ.get("CLAUDE_API_KEY")
 WP_ACCESS_TOKEN = os.environ.get("WP_ACCESS_TOKEN")
 WP_SITE = "aimoneyhacksblog.wordpress.com"
 PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY")
+
+TOPICS = [
+    # Make Money Online
+    "how to make money online with AI tools in 2026",
+    "best AI side hustles you can start with no experience",
+    "how to use ChatGPT to make your first $1000 online",
+    "AI tools that pay you to use them in 2026",
+    "how to make passive income with AI in 2026",
+    "how to sell AI-generated content online",
+    "best ways to monetize a blog using AI in 2026",
+    "how to make money on Fiverr using AI tools",
+    "how to create and sell digital products using AI",
+    "how to build a profitable online business with AI",
+    # Personal Finance
+    "how to save money every month using AI tools",
+    "best AI budgeting tools to manage your money in 2026",
+    "how to use AI to cut your monthly expenses",
+    "AI tools that help you invest smarter in 2026",
+    "how to use ChatGPT for personal finance planning",
+    "best free AI tools to track and grow your savings",
+    "how AI can help you get out of debt faster",
+    "how to use AI to find better deals and discounts",
+    # AI Tool Reviews
+    "ChatGPT vs Claude which is better for making money",
+    "best AI writing tools for freelancers in 2026",
+    "how to use Canva AI to create income online",
+    "best AI tools for content creators in 2026",
+    "how to use Notion AI to run a more profitable business",
+    "best AI tools for small business owners in 2026",
+    "how Grammarly and Copy.ai can boost your freelance income",
+    "best AI image tools to make money online in 2026",
+    # Freelancing and Side Hustles
+    "how to start a freelance writing business using AI",
+    "best side hustles using AI that actually make money",
+    "how to use AI to land more freelance clients",
+    "how to build a side hustle with AI in just one weekend",
+    "how to offer AI services on Upwork and Fiverr",
+    "how to use Descript to start a podcast editing business",
+    "how to use Midjourney to sell art and graphics online",
+    "how to use AI to write faster and earn more as a freelancer",
+    # Digital Marketing
+    "how to use AI for social media marketing to grow income",
+    "best AI tools for email marketing in 2026",
+    "how to use ChatGPT to write better ads and get more sales",
+    "how to grow a blog using AI and make money from it",
+    "how to use AI for affiliate marketing in 2026",
+    "how to use AI to grow your YouTube channel and earn money",
+]
+
+FORMATS = [
+    "Use a practical step-by-step guide format",
+    "Use a listicle format with numbered tips and clear takeaways",
+    "Use a beginner-friendly format explaining everything simply",
+    "Use a comparison format with clear pros and cons",
+    "Use a myth-busting format that challenges common misconceptions",
+    "Use a case study style showing real before and after scenarios",
+    "Use a Q&A format answering the most common questions",
+]
 
 def get_pexels_image(keyword):
     try:
@@ -27,12 +86,17 @@ def get_pexels_image(keyword):
 def generate_post():
     client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
     today = datetime.datetime.now().strftime("%B %d, %Y")
+    day_of_year = datetime.datetime.now().timetuple().tm_yday
+    topic = TOPICS[day_of_year % len(TOPICS)]
+    fmt = FORMATS[day_of_year % len(FORMATS)]
+    print(f"Topic: {topic}")
+    print(f"Format: {fmt}")
     message = client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=2000,
         messages=[{
             "role": "user",
-            "content": "Write a complete blog post for today (" + today + ") about AI tools or tips to make or save money.\n\nRequirements:\n- Title: catchy, specific, SEO friendly (include year 2026)\n- Length: exactly 900-1000 words, NO cutting off mid-sentence\n- Tone: friendly, conversational, practical\n- Only mention REAL existing AI tools: ChatGPT, Claude, Gemini, Jasper, Descript, Canva AI, Midjourney, Notion AI, Copy.ai, Grammarly\n- Do NOT invent fake tools, fake statistics, or fake user stories\n- Structure: intro, 3 main strategies, bonus tips, strong conclusion\n- Every section must be fully completed\n- End with a complete call to action paragraph\n- Add emojis to headings\n- Format: clean HTML with h2, h3, p, ul, li tags\n\nReturn in this EXACT format with no extra text:\nTITLE: [your title here]\nKEYWORD: [one word image search keyword]\nDESCRIPTION: [one sentence meta description]\nCONTENT: [your complete html content here]"
+            "content": "Write a complete blog post for today (" + today + ") about: " + topic + "\n\n" + fmt + "\n\nRequirements:\n- Title: catchy, specific, SEO friendly (include year 2026)\n- Length: exactly 900-1000 words, NO cutting off mid-sentence\n- Tone: friendly, conversational, practical, engaging\n- Only mention REAL existing AI tools: ChatGPT, Claude, Gemini, Jasper, Descript, Canva AI, Midjourney, Notion AI, Copy.ai, Grammarly\n- Do NOT invent fake tools, fake statistics, or fake user stories\n- Avoid generic advice - be specific and actionable\n- Every section must be fully completed\n- End with a strong call to action\n- Add emojis to headings\n- Format: clean HTML with h2, h3, p, ul, li tags\n\nReturn in this EXACT format with no extra text:\nTITLE: [your title here]\nKEYWORD: [one word image search keyword]\nDESCRIPTION: [one sentence meta description]\nCONTENT: [your complete html content here]"
         }]
     )
     response = message.content[0].text
