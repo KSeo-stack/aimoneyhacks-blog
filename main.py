@@ -29,7 +29,7 @@ DRAFT_MODE = os.environ.get("DRAFT_MODE", "true").lower() == "true"
 HIGH_RISK_DRAFT_MODE = os.environ.get("HIGH_RISK_DRAFT_MODE", "true").lower() == "true"
 
 CTA_INSERT_RATE = 0.60
-MAX_SEARCH_QUERIES = 8
+MAX_SEARCH_QUERIES = 10
 
 CATEGORIES = [
     "Personal Finance & Investing",
@@ -125,6 +125,18 @@ BANNED_PHRASES = [
     "cutting-edge solution"
 ]
 
+UNSUPPORTED_RANKING_PHRASES = [
+    "top-rated",
+    "best overall",
+    "number one",
+    "#1",
+    "leads on",
+    "industry-leading",
+    "market-leading",
+    "the leader in",
+    "leading solution"
+]
+
 RISKY_FINANCE_PHRASES = [
     "tax-free and penalty-free",
     "completely tax-free",
@@ -184,6 +196,33 @@ PRICING_GUESS_PATTERNS = [
     r"mid\s+double\s+digits",
     r"high\s+double\s+digits"
 ]
+
+OFFICIAL_SOURCE_DOMAINS = {
+    "1password.com",
+    "bitwarden.com",
+    "nordpass.com",
+    "proton.me",
+    "keepersecurity.com",
+    "roboform.com",
+    "dashlane.com",
+    "irs.gov",
+    "nist.gov",
+    "cisa.gov",
+    "ftc.gov",
+    "sec.gov",
+    "fidelity.com",
+    "schwab.com",
+    "vanguard.com",
+    "microsoft.com",
+    "google.com",
+    "cloudflare.com",
+    "okta.com",
+    "atlassian.com",
+    "shopify.com",
+    "stripe.com",
+    "hubspot.com",
+    "salesforce.com"
+}
 
 
 def validate_env():
@@ -366,6 +405,119 @@ def get_effective_draft_mode(title, category):
     return False
 
 
+def get_domain(url):
+    try:
+        parsed = urllib.parse.urlparse(url)
+        domain = parsed.netloc.lower()
+        if domain.startswith("www."):
+            domain = domain[4:]
+        return domain
+    except Exception:
+        return ""
+
+
+def is_official_source_url(url):
+    domain = get_domain(url)
+
+    if not domain:
+        return False
+
+    if domain.endswith(".gov"):
+        return True
+
+    for official_domain in OFFICIAL_SOURCE_DOMAINS:
+        if domain == official_domain or domain.endswith("." + official_domain):
+            return True
+
+    return False
+
+
+def parse_reference_blocks(context):
+    blocks = []
+    current = None
+
+    for line in (context or "").splitlines():
+        line = line.strip()
+
+        if line.startswith("Title:"):
+            if current:
+                blocks.append(current)
+
+            current = {
+                "title": line.replace("Title:", "", 1).strip(),
+                "snippet": "",
+                "url": ""
+            }
+
+        elif line.startswith("Snippet:") and current:
+            current["snippet"] = line.replace("Snippet:", "", 1).strip()
+
+        elif line.startswith("URL:") and current:
+            current["url"] = line.replace("URL:", "", 1).strip()
+
+    if current:
+        blocks.append(current)
+
+    return blocks
+
+
+def extract_money_amounts(text):
+    if not text:
+        return []
+
+    pattern = r"\$(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
+    amounts = re.findall(pattern, text)
+
+    unique = []
+    for amount in amounts:
+        if amount not in unique:
+            unique.append(amount)
+
+    return unique
+
+
+def normalize_money_amount(amount):
+    return amount.replace("$", "").replace(",", "").strip()
+
+
+def analyze_money_claims_against_context(content, context):
+    content_amounts = extract_money_amounts(html_to_text(content))
+    reference_blocks = parse_reference_blocks(context)
+
+    analysis = []
+
+    for amount in content_amounts:
+        normalized_amount = normalize_money_amount(amount)
+
+        if normalized_amount in {"0", "0.00"}:
+            continue
+
+        supporting_blocks = []
+
+        for block in reference_blocks:
+            block_text = f"{block.get('title', '')} {block.get('snippet', '')}"
+            block_amounts = extract_money_amounts(block_text)
+            normalized_block_amounts = [normalize_money_amount(x) for x in block_amounts]
+
+            if normalized_amount in normalized_block_amounts:
+                supporting_blocks.append({
+                    "title": block.get("title", ""),
+                    "url": block.get("url", ""),
+                    "official": is_official_source_url(block.get("url", ""))
+                })
+
+        official_supported = any(block["official"] for block in supporting_blocks)
+
+        analysis.append({
+            "amount": amount,
+            "found_in_reference": len(supporting_blocks) > 0,
+            "official_source_supported": official_supported,
+            "supporting_sources": supporting_blocks[:3]
+        })
+
+    return analysis
+
+
 def validate_title(title):
     issues = []
 
@@ -474,7 +626,9 @@ def validate_pricing_patterns(content):
         "per seat",
         "up to",
         "plan",
-        "tier"
+        "tier",
+        "renewal",
+        "first-year"
     ]
 
     for sentence in pricing_claims:
@@ -486,7 +640,34 @@ def validate_pricing_patterns(content):
     return issues
 
 
-def validate_content_quality(title, content):
+def validate_money_claims_against_context(content, context):
+    issues = []
+    money_analysis = analyze_money_claims_against_context(content, context)
+
+    for item in money_analysis:
+        amount = item["amount"]
+
+        if not item["found_in_reference"]:
+            issues.append(f"Specific dollar amount not found in reference data: {amount}")
+
+        elif not item["official_source_supported"]:
+            issues.append(f"Specific dollar amount not backed by official source: {amount}")
+
+    return issues
+
+
+def validate_unsupported_ranking_claims(content):
+    issues = []
+    text = html_to_text(content).lower()
+
+    for phrase in UNSUPPORTED_RANKING_PHRASES:
+        if phrase in text:
+            issues.append(f"Unsupported ranking/superlative phrase found: {phrase}")
+
+    return issues
+
+
+def validate_content_quality(title, content, context):
     issues = []
 
     if not content:
@@ -503,7 +684,9 @@ def validate_content_quality(title, content):
         if phrase in lowered_all:
             issues.append(f"Risky finance wording found: {phrase}")
 
+    issues.extend(validate_unsupported_ranking_claims(content))
     issues.extend(validate_pricing_patterns(content))
+    issues.extend(validate_money_claims_against_context(content, context))
 
     word_count = count_words_from_html(content)
 
@@ -603,15 +786,21 @@ def post_to_blogger(service, title, content, category, description, is_draft):
     print("✅ Post published successfully." if not is_draft else "✅ Draft saved successfully.")
 
 
-def build_validation_report(title, description, category, content, issues, validation_passed, effective_draft_mode):
+def build_validation_report(title, description, category, content, context, issues, validation_passed, effective_draft_mode):
     numeric_claims = extract_numeric_claim_sentences(content)
     pricing_claims = extract_pricing_claim_sentences(content)
+    money_analysis = analyze_money_claims_against_context(content, context)
 
     has_quick_summary = "quick summary" in f"{title} {content}".lower()
     has_table = "<table" in content.lower()
     has_checklist = "checklist" in content.lower()
     has_action_plan = "practical action plan" in f"{title} {content}".lower()
     high_risk = is_high_risk_post(title, category)
+
+    unsupported_money_amounts = [
+        item for item in money_analysis
+        if not item["found_in_reference"] or not item["official_source_supported"]
+    ]
 
     if issues:
         risk_level = "high"
@@ -633,6 +822,8 @@ def build_validation_report(title, description, category, content, issues, valid
         "pricing_claims_found": len(pricing_claims),
         "numeric_claim_sentences": numeric_claims,
         "pricing_claim_sentences": pricing_claims,
+        "money_claim_analysis": money_analysis,
+        "unsupported_money_amounts": unsupported_money_amounts,
         "risk_issues": issues,
         "risk_level": risk_level,
         "high_risk_post": high_risk,
@@ -727,7 +918,8 @@ def build_search_queries(topic, query1, query2, category):
             f"{topic} official pricing",
             f"{topic} pricing plans",
             f"{query1} pricing",
-            f"{query2} cost"
+            f"{query2} cost",
+            f"{topic} vendor pricing page"
         ])
 
     if "password manager" in combined:
@@ -736,7 +928,9 @@ def build_search_queries(topic, query1, query2, category):
             "site:bitwarden.com pricing business",
             "site:nordpass.com business pricing",
             "site:proton.me pass business pricing",
-            "site:keepersecurity.com business pricing"
+            "site:keepersecurity.com business pricing",
+            "site:roboform.com pricing business",
+            "site:dashlane.com business pricing"
         ])
 
     if any(keyword in combined for keyword in ["roth", "ira", "401k", "tax", "retirement"]):
@@ -749,6 +943,7 @@ def build_search_queries(topic, query1, query2, category):
     if any(keyword in combined for keyword in ["zero trust", "cybersecurity", "security", "compliance"]):
         queries.extend([
             f"site:nist.gov {topic}",
+            f"site:cisa.gov {topic}",
             f"{topic} official guidance"
         ])
 
@@ -882,12 +1077,13 @@ SEO AND QUALITY RULES:
 14. Do not overuse emojis. Use them mainly in headings.
 15. If the title mentions "cost", "pricing", or "comparison", include a cost/budget table without inventing exact prices.
 16. If the article discusses products or solutions, prefer tool categories over unsupported vendor rankings.
-17. If exact pricing is not clearly visible in REFERENCE_DATA, write "pricing varies by plan, billing term, and team size" or "check current vendor pricing" instead of giving numbers.
+17. If exact pricing is not clearly visible from official vendor sources in REFERENCE_DATA, write "pricing varies by plan, billing term, and team size" or "check current vendor pricing" instead of giving numbers.
 18. Do not use approximate pricing like "~$30", "around $30", "roughly $30", "about $30", or "$30-$40".
 19. If you mention a specific dollar amount, include the billing basis clearly, such as per user/month, per user/year, per month for up to X users, or billed annually.
 20. Do not convert monthly prices into annual prices unless the math and billing basis are explicit in REFERENCE_DATA.
-21. <DESCRIPTION> must be under 160 characters.
-22. <IMAGE_PROMPT> must describe a minimalist, matte digital art piece for this topic. No faces. No text. No logos.
+21. Do not write "top-rated", "market-leading", "industry-leading", or "leads on" unless the ranking is explicitly supported in REFERENCE_DATA. Prefer "commonly reviewed" or "often considered".
+22. <DESCRIPTION> must be under 160 characters.
+23. <IMAGE_PROMPT> must describe a minimalist, matte digital art piece for this topic. No faces. No text. No logos.
 
 Return EXACTLY the XML format below and nothing else.
 
@@ -1006,7 +1202,7 @@ Rules:
     response2 = msg2.content[0].text
     title, image_prompt, description, content = parse_article_response(response2, topic)
 
-    issues = validate_content_quality(title, content)
+    issues = validate_content_quality(title, content, context)
 
     if issues:
         print("⚠️ Quality issues found. Trying one revision...")
@@ -1033,7 +1229,7 @@ Rules:
         response3 = msg3.content[0].text
         title, image_prompt, description, content = parse_article_response(response3, topic)
 
-        issues = validate_content_quality(title, content)
+        issues = validate_content_quality(title, content, context)
 
     validation_passed = len(issues) == 0
 
@@ -1068,6 +1264,7 @@ Rules:
         "content": final_content,
         "description": description,
         "category": category,
+        "context": context,
         "validation_issues": issues,
         "validation_passed": validation_passed
     }
@@ -1097,6 +1294,7 @@ if __name__ == "__main__":
             description=post["description"],
             category=post["category"],
             content=post["content"],
+            context=post["context"],
             issues=post["validation_issues"],
             validation_passed=post["validation_passed"],
             effective_draft_mode=effective_draft_mode
