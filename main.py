@@ -1,6 +1,7 @@
 import anthropic
 import datetime
 import html
+import json
 import os
 import random
 import re
@@ -23,9 +24,12 @@ BLOGGER_REFRESH_TOKEN = os.environ.get("BLOGGER_REFRESH_TOKEN")
 BLOG_ID = os.environ.get("BLOG_ID")
 
 CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL") or "claude-sonnet-4-6"
+
 DRAFT_MODE = os.environ.get("DRAFT_MODE", "true").lower() == "true"
+HIGH_RISK_DRAFT_MODE = os.environ.get("HIGH_RISK_DRAFT_MODE", "true").lower() == "true"
 
 CTA_INSERT_RATE = 0.60
+MAX_SEARCH_QUERIES = 8
 
 CATEGORIES = [
     "Personal Finance & Investing",
@@ -121,6 +125,66 @@ BANNED_PHRASES = [
     "cutting-edge solution"
 ]
 
+RISKY_FINANCE_PHRASES = [
+    "tax-free and penalty-free",
+    "completely tax-free",
+    "guaranteed",
+    "risk-free",
+    "will save you",
+    "you should convert",
+    "you should invest"
+]
+
+HIGH_RISK_CATEGORIES = {
+    "Personal Finance & Investing",
+    "Cybersecurity & Online Privacy"
+}
+
+HIGH_RISK_KEYWORDS = [
+    "tax",
+    "ira",
+    "roth",
+    "401k",
+    "retirement",
+    "investing",
+    "insurance",
+    "legal",
+    "hipaa",
+    "soc 2",
+    "pricing",
+    "cost",
+    "comparison",
+    "security",
+    "compliance",
+    "breach",
+    "privacy",
+    "password manager",
+    "zero trust"
+]
+
+PRICING_INTENT_KEYWORDS = [
+    "pricing",
+    "price",
+    "cost",
+    "comparison",
+    "plans",
+    "tools",
+    "software",
+    "platform",
+    "solution",
+    "password manager",
+    "saas"
+]
+
+PRICING_GUESS_PATTERNS = [
+    r"(?:~|approximately|approx\.?|around|roughly|about|typically|usually|estimated(?:\s+at)?|averages?)\s*\$[\d,]+(?:\.\d+)?",
+    r"\$[\d,]+(?:\.\d+)?\s*(?:-|–|—|to)\s*\$?[\d,]+(?:\.\d+)?",
+    r"\$[\d,]+(?:\.\d+)?\s*(?:-|–|—|to)\s*[\d,]+(?:\.\d+)?",
+    r"low\s+double\s+digits",
+    r"mid\s+double\s+digits",
+    r"high\s+double\s+digits"
+]
+
 
 def validate_env():
     required_vars = {
@@ -173,6 +237,14 @@ def clean_title(title, fallback):
     title = title.strip() if title else fallback
     title = re.sub(r"\s+", " ", title)
     return title[:120]
+
+
+def html_to_text(content):
+    text = re.sub(r"<[^>]+>", " ", content or "")
+    text = html.unescape(text)
+    text = re.sub(r"&nbsp;", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
 
 
 def clean_html_content(content, title=""):
@@ -229,10 +301,7 @@ def clean_html_content(content, title=""):
 
 
 def count_words_from_html(content):
-    text = re.sub(r"<.*?>", " ", content)
-    text = re.sub(r"&nbsp;", " ", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    return len(text.split())
+    return len(html_to_text(content).split())
 
 
 def get_category_labels(category):
@@ -270,6 +339,33 @@ def get_disclaimer_for_category(category):
     return ""
 
 
+def has_pricing_intent(text):
+    lowered = text.lower()
+    return any(keyword in lowered for keyword in PRICING_INTENT_KEYWORDS)
+
+
+def is_high_risk_post(title, category):
+    combined = f"{title} {category}".lower()
+
+    if category in HIGH_RISK_CATEGORIES:
+        return True
+
+    return any(keyword in combined for keyword in HIGH_RISK_KEYWORDS)
+
+
+def get_effective_draft_mode(title, category):
+    high_risk = is_high_risk_post(title, category)
+
+    if DRAFT_MODE:
+        return True
+
+    if HIGH_RISK_DRAFT_MODE and high_risk:
+        print("⚠️ High-risk topic detected. Forcing draft mode.")
+        return True
+
+    return False
+
+
 def validate_title(title):
     issues = []
 
@@ -296,6 +392,100 @@ def validate_title(title):
     return issues
 
 
+def split_sentences(text):
+    if not text:
+        return []
+
+    raw_sentences = re.split(r"(?<=[.!?])\s+", text)
+    sentences = []
+
+    for sentence in raw_sentences:
+        sentence = sentence.strip()
+        if len(sentence) >= 25:
+            sentences.append(sentence)
+
+    return sentences
+
+
+def extract_numeric_claim_sentences(content):
+    text = html_to_text(content)
+    sentences = split_sentences(text)
+
+    numeric_patterns = [
+        r"\$[\d,]+(?:\.\d+)?",
+        r"\b\d+(?:\.\d+)?%",
+        r"\b20\d{2}\b",
+        r"\b\d+\s*(?:-|–|—)?\s*year\b",
+        r"\b\d+\s*users?\b",
+        r"\bup to\s+\d+",
+        r"\bSOC\s*2\b",
+        r"\bHIPAA\b",
+        r"\bSSO\b",
+        r"\bfree tier\b",
+        r"\bzero-knowledge\b"
+    ]
+
+    claim_sentences = []
+
+    for sentence in sentences:
+        for pattern in numeric_patterns:
+            if re.search(pattern, sentence, re.IGNORECASE):
+                claim_sentences.append(sentence)
+                break
+
+    return claim_sentences[:40]
+
+
+def extract_pricing_claim_sentences(content):
+    text = html_to_text(content)
+    sentences = split_sentences(text)
+
+    pricing_sentences = []
+
+    for sentence in sentences:
+        if "$" in sentence or re.search(r"\bpricing\b|\bprice\b|\bcost\b|\bper user\b|\bper month\b|\bper year\b", sentence, re.IGNORECASE):
+            pricing_sentences.append(sentence)
+
+    return pricing_sentences[:30]
+
+
+def validate_pricing_patterns(content):
+    issues = []
+    text = html_to_text(content)
+
+    for pattern in PRICING_GUESS_PATTERNS:
+        if re.search(pattern, text, re.IGNORECASE):
+            issues.append(f"Guess-pricing or vague numeric pricing pattern found: {pattern}")
+
+    pricing_claims = extract_pricing_claim_sentences(content)
+
+    billing_basis_words = [
+        "/mo",
+        "/month",
+        "per month",
+        "monthly",
+        "/year",
+        "per year",
+        "annually",
+        "annual",
+        "billed",
+        "per user",
+        "per employee",
+        "per seat",
+        "up to",
+        "plan",
+        "tier"
+    ]
+
+    for sentence in pricing_claims:
+        if "$" in sentence:
+            lowered = sentence.lower()
+            if not any(word in lowered for word in billing_basis_words):
+                issues.append(f"Specific price lacks billing basis: {sentence[:180]}")
+
+    return issues
+
+
 def validate_content_quality(title, content):
     issues = []
 
@@ -308,6 +498,12 @@ def validate_content_quality(title, content):
     for phrase in BANNED_PHRASES:
         if phrase in lowered_all:
             issues.append(f"Banned or AI-cliché phrase found: {phrase}")
+
+    for phrase in RISKY_FINANCE_PHRASES:
+        if phrase in lowered_all:
+            issues.append(f"Risky finance wording found: {phrase}")
+
+    issues.extend(validate_pricing_patterns(content))
 
     word_count = count_words_from_html(content)
 
@@ -336,18 +532,6 @@ def validate_content_quality(title, content):
     if "top " in title.lower() and "solution" in title.lower():
         if "best for" not in lowered_all and "avoid if" not in lowered_all:
             issues.append("Title implies product/solution comparison, but content lacks decision-support language.")
-
-    risky_finance_phrases = [
-        "tax-free and penalty-free",
-        "completely tax-free",
-        "guaranteed",
-        "risk-free",
-        "will save you"
-    ]
-
-    for phrase in risky_finance_phrases:
-        if phrase in lowered_all:
-            issues.append(f"Risky finance wording found: {phrase}")
 
     issues.extend(validate_title(title))
 
@@ -392,7 +576,7 @@ def get_recent_posts(service):
         return []
 
 
-def post_to_blogger(service, title, content, category, description):
+def post_to_blogger(service, title, content, category, description, is_draft):
     labels = get_category_labels(category)
 
     body = {
@@ -402,13 +586,13 @@ def post_to_blogger(service, title, content, category, description):
         "customMetaData": description[:300] if description else ""
     }
 
-    print(f"Publishing to Blogger... Draft mode: {DRAFT_MODE}")
+    print(f"Publishing to Blogger... Draft mode: {is_draft}")
     print(f"Labels: {labels}")
 
     request = service.posts().insert(
         blogId=BLOG_ID,
         body=body,
-        isDraft=DRAFT_MODE
+        isDraft=is_draft
     )
 
     execute_google_request_with_retries(
@@ -416,17 +600,58 @@ def post_to_blogger(service, title, content, category, description):
         action_name="Publish Blogger post"
     )
 
-    print("✅ Post published successfully." if not DRAFT_MODE else "✅ Draft saved successfully.")
+    print("✅ Post published successfully." if not is_draft else "✅ Draft saved successfully.")
 
 
-def save_local_backup(title, content, description, category):
+def build_validation_report(title, description, category, content, issues, validation_passed, effective_draft_mode):
+    numeric_claims = extract_numeric_claim_sentences(content)
+    pricing_claims = extract_pricing_claim_sentences(content)
+
+    has_quick_summary = "quick summary" in f"{title} {content}".lower()
+    has_table = "<table" in content.lower()
+    has_checklist = "checklist" in content.lower()
+    has_action_plan = "practical action plan" in f"{title} {content}".lower()
+    high_risk = is_high_risk_post(title, category)
+
+    if issues:
+        risk_level = "high"
+    elif high_risk or len(numeric_claims) >= 8:
+        risk_level = "medium"
+    else:
+        risk_level = "low"
+
+    return {
+        "title": title,
+        "description": description,
+        "category": category,
+        "word_count": count_words_from_html(content),
+        "has_quick_summary": has_quick_summary,
+        "has_table": has_table,
+        "has_checklist": has_checklist,
+        "has_practical_action_plan": has_action_plan,
+        "numeric_claims_found": len(numeric_claims),
+        "pricing_claims_found": len(pricing_claims),
+        "numeric_claim_sentences": numeric_claims,
+        "pricing_claim_sentences": pricing_claims,
+        "risk_issues": issues,
+        "risk_level": risk_level,
+        "high_risk_post": high_risk,
+        "validation_passed": validation_passed,
+        "effective_draft_mode": effective_draft_mode,
+        "publish_allowed": validation_passed and not effective_draft_mode,
+        "generated_at": datetime.datetime.now().isoformat()
+    }
+
+
+def save_local_backup(title, content, description, category, validation_report):
     backup_dir = Path("draft_backups")
     backup_dir.mkdir(exist_ok=True)
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_title = re.sub(r'[\\/*?:"<>|]', "", title)[:60]
 
-    file_path = backup_dir / f"{timestamp}_{safe_title}.html"
+    html_path = backup_dir / f"{timestamp}_{safe_title}.html"
+    json_path = backup_dir / f"{timestamp}_{safe_title}_validation_report.json"
 
     html_content = f"""<!DOCTYPE html>
 <html lang="en">
@@ -444,9 +669,16 @@ def save_local_backup(title, content, description, category):
 </html>
 """
 
-    file_path.write_text(html_content, encoding="utf-8")
-    print(f"✅ Local backup saved: {file_path}")
-    return file_path
+    html_path.write_text(html_content, encoding="utf-8")
+    json_path.write_text(
+        json.dumps(validation_report, ensure_ascii=False, indent=2),
+        encoding="utf-8"
+    )
+
+    print(f"✅ Local HTML backup saved: {html_path}")
+    print(f"✅ Validation report saved: {json_path}")
+
+    return html_path, json_path
 
 
 def generate_ai_image_url(topic_prompt, category):
@@ -471,6 +703,56 @@ def generate_ai_image_url(topic_prompt, category):
         f"https://image.pollinations.ai/prompt/{encoded_prompt}"
         f"?seed={seed}&width=1280&height=720&nologo=true"
     )
+
+
+def dedupe_preserve_order(items):
+    seen = set()
+    result = []
+
+    for item in items:
+        normalized = item.strip().lower()
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            result.append(item.strip())
+
+    return result
+
+
+def build_search_queries(topic, query1, query2, category):
+    queries = [query1, query2]
+    combined = f"{topic} {query1} {query2} {category}".lower()
+
+    if has_pricing_intent(combined):
+        queries.extend([
+            f"{topic} official pricing",
+            f"{topic} pricing plans",
+            f"{query1} pricing",
+            f"{query2} cost"
+        ])
+
+    if "password manager" in combined:
+        queries.extend([
+            "site:1password.com pricing teams",
+            "site:bitwarden.com pricing business",
+            "site:nordpass.com business pricing",
+            "site:proton.me pass business pricing",
+            "site:keepersecurity.com business pricing"
+        ])
+
+    if any(keyword in combined for keyword in ["roth", "ira", "401k", "tax", "retirement"]):
+        queries.extend([
+            f"site:irs.gov {topic}",
+            "site:irs.gov Roth IRA conversion five year rule",
+            "site:irs.gov federal income tax brackets 2026"
+        ])
+
+    if any(keyword in combined for keyword in ["zero trust", "cybersecurity", "security", "compliance"]):
+        queries.extend([
+            f"site:nist.gov {topic}",
+            f"{topic} official guidance"
+        ])
+
+    return dedupe_preserve_order(queries)[:MAX_SEARCH_QUERIES]
 
 
 def get_real_time_context(queries):
@@ -512,8 +794,8 @@ def get_real_time_context(queries):
     if len(context.strip()) < 300:
         context = (
             "Limited search context was available. Write a conservative evergreen guide. "
-            "Do not include specific statistics, prices, breach costs, market sizes, laws, or dates unless clearly supported. "
-            "Use general best practices and clearly state that costs vary by company size, tools, and requirements."
+            "Do not include specific statistics, prices, breach costs, market sizes, laws, tax brackets, contribution limits, or dates unless clearly supported. "
+            "Use general best practices and clearly state that costs, pricing, laws, and requirements vary by provider, company size, location, and situation."
         )
 
     return context
@@ -600,8 +882,12 @@ SEO AND QUALITY RULES:
 14. Do not overuse emojis. Use them mainly in headings.
 15. If the title mentions "cost", "pricing", or "comparison", include a cost/budget table without inventing exact prices.
 16. If the article discusses products or solutions, prefer tool categories over unsupported vendor rankings.
-17. <DESCRIPTION> must be under 160 characters.
-18. <IMAGE_PROMPT> must describe a minimalist, matte digital art piece for this topic. No faces. No text. No logos.
+17. If exact pricing is not clearly visible in REFERENCE_DATA, write "pricing varies by plan, billing term, and team size" or "check current vendor pricing" instead of giving numbers.
+18. Do not use approximate pricing like "~$30", "around $30", "roughly $30", "about $30", or "$30-$40".
+19. If you mention a specific dollar amount, include the billing basis clearly, such as per user/month, per user/year, per month for up to X users, or billed annually.
+20. Do not convert monthly prices into annual prices unless the math and billing basis are explicit in REFERENCE_DATA.
+21. <DESCRIPTION> must be under 160 characters.
+22. <IMAGE_PROMPT> must describe a minimalist, matte digital art piece for this topic. No faces. No text. No logos.
 
 Return EXACTLY the XML format below and nothing else.
 
@@ -700,7 +986,8 @@ Rules:
 
     print(f"Generated topic: {topic}")
 
-    context = get_real_time_context([query1, query2])
+    search_queries = build_search_queries(topic, query1, query2, category)
+    context = get_real_time_context(search_queries)
 
     article_prompt = build_article_prompt(
         today=today,
@@ -748,11 +1035,12 @@ Rules:
 
         issues = validate_content_quality(title, content)
 
-        if issues:
-            print("❌ Quality issues remain after revision:")
-            for issue in issues:
-                print(f"- {issue}")
-            raise ValueError("Final content failed quality validation. Refusing to publish.")
+    validation_passed = len(issues) == 0
+
+    if issues:
+        print("❌ Quality issues remain after revision:")
+        for issue in issues:
+            print(f"- {issue}")
 
     image_url = generate_ai_image_url(image_prompt, category)
     safe_alt = html.escape(title, quote=True)
@@ -773,34 +1061,68 @@ Rules:
     print(f"Word count: {count_words_from_html(content)}")
     print(f"Disclaimer inserted: {'Yes' if disclaimer else 'No'}")
     print(f"CTA inserted: {'Yes' if cta else 'No'}")
+    print(f"Validation passed: {validation_passed}")
 
-    return title, final_content, description, category
+    return {
+        "title": title,
+        "content": final_content,
+        "description": description,
+        "category": category,
+        "validation_issues": issues,
+        "validation_passed": validation_passed
+    }
 
 
 if __name__ == "__main__":
     try:
         print("🚀 Starting Automated Blog Pipeline...")
         print(f"Using Claude model: {CLAUDE_MODEL}")
-        print(f"Draft mode: {DRAFT_MODE}")
+        print(f"Draft mode from YAML: {DRAFT_MODE}")
+        print(f"High-risk draft mode: {HIGH_RISK_DRAFT_MODE}")
 
         validate_env()
 
         blogger_service = get_blogger_service()
         recent_titles = get_recent_posts(blogger_service)
 
-        title, content, description, category = generate_post(recent_titles)
+        post = generate_post(recent_titles)
 
-        save_local_backup(title, content, description, category)
+        effective_draft_mode = get_effective_draft_mode(
+            title=post["title"],
+            category=post["category"]
+        )
+
+        validation_report = build_validation_report(
+            title=post["title"],
+            description=post["description"],
+            category=post["category"],
+            content=post["content"],
+            issues=post["validation_issues"],
+            validation_passed=post["validation_passed"],
+            effective_draft_mode=effective_draft_mode
+        )
+
+        save_local_backup(
+            title=post["title"],
+            content=post["content"],
+            description=post["description"],
+            category=post["category"],
+            validation_report=validation_report
+        )
+
+        if not post["validation_passed"]:
+            raise ValueError("Final content failed quality validation. Backup and validation report were saved.")
 
         post_to_blogger(
             service=blogger_service,
-            title=title,
-            content=content,
-            category=category,
-            description=description
+            title=post["title"],
+            content=post["content"],
+            category=post["category"],
+            description=post["description"],
+            is_draft=effective_draft_mode
         )
 
-        print(f"✅ Success: {title}")
+        print(f"✅ Success: {post['title']}")
 
     except Exception as e:
         print(f"❌ Automation failed: {e}")
