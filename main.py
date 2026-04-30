@@ -11,7 +11,12 @@ from typing import List, Tuple, Optional
 
 import requests
 import anthropic
-from duckduckgo_search import DDGS
+
+try:
+    from ddgs import DDGS
+except ImportError:
+    from duckduckgo_search import DDGS
+
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -74,7 +79,6 @@ BANNED_AI_PHRASES = [
     "to sum up",
     "one-size-fits-all",
     "unlock the power of",
-    "leverage",
 ]
 
 GUESS_PRICING_PATTERNS = [
@@ -136,21 +140,28 @@ def word_count(text: str) -> int:
 
 def with_retry(func, max_attempts=4, base_sleep=2, retriable_statuses=(429, 500, 503)):
     last_error = None
+
     for attempt in range(1, max_attempts + 1):
         try:
             return func()
+
         except HttpError as e:
             status = getattr(e.resp, "status", None)
             last_error = e
+
             if status not in retriable_statuses or attempt == max_attempts:
                 raise
+
             sleep_s = base_sleep * attempt
             log(f"⚠️ Blogger API temporary error ({status}). Retry {attempt}/{max_attempts} in {sleep_s}s...")
             time.sleep(sleep_s)
+
         except requests.RequestException as e:
             last_error = e
+
             if attempt == max_attempts:
                 raise
+
             sleep_s = base_sleep * attempt
             log(f"⚠️ Network error. Retry {attempt}/{max_attempts} in {sleep_s}s...")
             time.sleep(sleep_s)
@@ -170,11 +181,13 @@ def get_blogger_service():
         client_id=BLOGGER_CLIENT_ID,
         client_secret=BLOGGER_CLIENT_SECRET,
     )
+
     return build("blogger", "v3", credentials=creds)
 
 
 def get_recent_posts(service, max_results: int = 15) -> List[str]:
     log("Fetching recent Blogger posts...")
+
     try:
         response = with_retry(
             lambda: service.posts().list(
@@ -183,10 +196,13 @@ def get_recent_posts(service, max_results: int = 15) -> List[str]:
                 status="LIVE"
             ).execute()
         )
+
         items = response.get("items", [])
         titles = [item.get("title", "").strip() for item in items if item.get("title")]
+
         log(f"Fetched {len(titles)} recent titles.")
         return titles
+
     except Exception as e:
         log(f"⚠️ Could not fetch recent posts: {e}")
         return []
@@ -216,6 +232,7 @@ def post_to_blogger(service, title: str, content: str, labels: List[str], is_dra
         log("✅ Draft saved successfully.")
     else:
         log("✅ Post published successfully.")
+
     return result
 
 
@@ -229,9 +246,11 @@ def get_real_time_context(queries: List[str], max_results: int = 4) -> str:
         with DDGS() as ddgs:
             for q in queries:
                 log(f"Searching: {q}")
+
                 try:
                     results = list(ddgs.text(q, max_results=max_results))
-                except Exception:
+                except Exception as e:
+                    log(f"⚠️ Search failed for query '{q}': {e}")
                     results = []
 
                 for r in results:
@@ -245,11 +264,15 @@ def get_real_time_context(queries: List[str], max_results: int = 4) -> str:
                             f"Snippet: {body}\n"
                             f"URL: {href}\n"
                         )
+
     except Exception as e:
         log(f"⚠️ Search failed: {e}")
 
     if not context_blocks:
-        return "No fresh reference data retrieved. Use broadly accepted, non-speculative information and avoid exact pricing unless clearly established."
+        return (
+            "No fresh reference data retrieved. Use broadly accepted, non-speculative information. "
+            "Avoid exact pricing, exact tax numbers, exact performance claims, and unsupported rankings."
+        )
 
     return "\n---\n".join(context_blocks[:12])
 
@@ -301,6 +324,7 @@ def get_pexels_image(search_query: str) -> Tuple[Optional[str], Optional[str], O
     try:
         response = requests.get(url, headers=headers, params=params, timeout=20)
         response.raise_for_status()
+
         data = response.json()
         photos = data.get("photos", [])
 
@@ -310,11 +334,13 @@ def get_pexels_image(search_query: str) -> Tuple[Optional[str], Optional[str], O
 
         chosen = photos[0]
         src = chosen.get("src", {})
+
         image_url = src.get("large2x") or src.get("large") or src.get("original")
         photographer = chosen.get("photographer")
         photo_page = chosen.get("url")
 
         return image_url, photographer, photo_page
+
     except Exception as e:
         log(f"⚠️ Pexels fetch failed: {e}")
         return None, None, None
@@ -343,22 +369,24 @@ def build_header_image_html(title: str, topic: str, category: str) -> str:
 
 
 # ==========================================
-# 5. HTML 후처리 (박스/표 스타일)
+# 5. HTML 후처리
 # ==========================================
 def merge_inline_style(tag_html: str, extra_style: str) -> str:
     if 'style="' in tag_html:
         return re.sub(
             r'style="([^"]*)"',
-            lambda m: f'style="{m.group(1).rstrip(";")}; {extra_style}"',
+            lambda m: f'style="{m.group(1).rstrip(';')}; {extra_style}"',
             tag_html,
             count=1,
             flags=re.IGNORECASE
         )
+
     return tag_html[:-1] + f' style="{extra_style}">'
 
 
 def force_text_color_in_block(block_html: str, color: str = "#111827") -> str:
     tags = ["h2", "h3", "h4", "p", "li", "span", "strong", "em", "ul", "ol", "a"]
+
     pattern = re.compile(
         rf"<({'|'.join(tags)})\b([^>]*)>",
         re.IGNORECASE
@@ -387,6 +415,7 @@ def restyle_special_boxes(content: str) -> str:
 
     def quick_repl(match):
         block = match.group(0)
+
         block = re.sub(
             r"<div\b[^>]*>",
             (
@@ -401,8 +430,8 @@ def restyle_special_boxes(content: str) -> str:
             count=1,
             flags=re.IGNORECASE
         )
-        block = force_text_color_in_block(block, "#111827")
-        return block
+
+        return force_text_color_in_block(block, "#111827")
 
     content = quick_pattern.sub(quick_repl, content)
 
@@ -413,6 +442,7 @@ def restyle_special_boxes(content: str) -> str:
 
     def note_repl(match):
         block = match.group(0)
+
         block = re.sub(
             r"<div\b[^>]*>",
             (
@@ -427,8 +457,8 @@ def restyle_special_boxes(content: str) -> str:
             count=1,
             flags=re.IGNORECASE
         )
-        block = force_text_color_in_block(block, "#111827")
-        return block
+
+        return force_text_color_in_block(block, "#111827")
 
     content = note_pattern.sub(note_repl, content)
 
@@ -543,6 +573,7 @@ def should_insert_cta(title: str, category: str, content: str) -> bool:
         "business",
         "crm",
     ]
+
     return any(k in haystack for k in related_keywords)
 
 
@@ -566,10 +597,21 @@ def needs_finance_disclaimer(category: str, title: str, content: str) -> bool:
         return True
 
     haystack = f"{title} {re.sub(r'<[^>]+>', ' ', content)}".lower()
+
     keywords = [
-        "invest", "dividend", "roth", "ira", "etf", "stock", "portfolio",
-        "retirement", "tax", "brokerage", "passive income"
+        "invest",
+        "dividend",
+        "roth",
+        "ira",
+        "etf",
+        "stock",
+        "portfolio",
+        "retirement",
+        "tax",
+        "brokerage",
+        "passive income"
     ]
+
     return any(k in haystack for k in keywords)
 
 
@@ -591,6 +633,7 @@ def build_labels(category: str, title: str, content: str) -> List[str]:
     text = f"{title} {re.sub(r'<[^>]+>', ' ', content)}".lower()
 
     extras = []
+
     keyword_map = {
         "crm": "CRM",
         "dividend": "Dividend Investing",
@@ -618,10 +661,12 @@ def validate_content_quality(title: str, content: str) -> List[str]:
     issues = []
 
     wc = word_count(content)
+
     if wc < 900:
         issues.append(f"Word count too low: {wc}")
 
     title_clean = title.strip()
+
     if len(title_clean) < 35:
         issues.append("Title too short")
 
@@ -675,6 +720,7 @@ def build_content_prompt(topic: str, category: str, fmt: str, reference_data: st
     high_risk = category in HIGH_RISK_CATEGORIES
 
     extra_rule = ""
+
     if high_risk:
         extra_rule = """
 IMPORTANT RISK RULE:
@@ -698,7 +744,7 @@ Reference data:
 Writing style rules:
 - Write in natural, fluent American English.
 - Sound human, clear, and modern. Do NOT sound robotic.
-- Slightly warm tone is okay, but do NOT use slang like "lol" or "ㅋㅋ".
+- Slightly warm tone is okay, but do NOT use slang like "lol" or Korean slang.
 - Use 1-2 tasteful emojis where appropriate, not too many.
 - Get to the core point fast.
 - Use short-to-medium paragraphs for readability.
@@ -771,11 +817,12 @@ Current content:
 """
 
 
-def generate_post(recent_titles: List[str]) -> Tuple[str, str, str, str, bool]:
+def generate_post(recent_titles: List[str]) -> Tuple[str, str, str, str, bool, List[str]]:
     client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
 
     category = random.choice(CATEGORIES)
     fmt = random.choice(FORMATS)
+
     log(f"Selected category: {category}")
     log(f"Selected format: {fmt}")
 
@@ -788,9 +835,11 @@ def generate_post(recent_titles: List[str]) -> Tuple[str, str, str, str, bool]:
     )
 
     topic_text = topic_resp.content[0].text
+
     topic = extract_tag(topic_text, "TOPIC")
     query1 = extract_tag(topic_text, "QUERY1")
     query2 = extract_tag(topic_text, "QUERY2")
+
     log(f"Generated topic: {topic}")
 
     reference_data = get_real_time_context([query1, query2])
@@ -802,6 +851,7 @@ def generate_post(recent_titles: List[str]) -> Tuple[str, str, str, str, bool]:
     )
 
     raw = content_resp.content[0].text
+
     title = extract_tag(raw, "TITLE")
     meta_description = extract_tag(raw, "META_DESCRIPTION")
     content = extract_tag(raw, "CONTENT")
@@ -811,8 +861,9 @@ def generate_post(recent_titles: List[str]) -> Tuple[str, str, str, str, bool]:
 
     if issues:
         log("⚠️ Quality issues found. Trying one revision...")
-        for i in issues:
-            log(f"- {i}")
+
+        for issue in issues:
+            log(f"- {issue}")
 
         revision_resp = client.messages.create(
             model=CLAUDE_MODEL,
@@ -821,6 +872,7 @@ def generate_post(recent_titles: List[str]) -> Tuple[str, str, str, str, bool]:
         )
 
         revised = revision_resp.content[0].text
+
         title = extract_tag(revised, "TITLE")
         meta_description = extract_tag(revised, "META_DESCRIPTION")
         content = extract_tag(revised, "CONTENT")
@@ -830,16 +882,14 @@ def generate_post(recent_titles: List[str]) -> Tuple[str, str, str, str, bool]:
 
         if issues:
             log("❌ Quality issues remain after revision:")
-            for i in issues:
-                log(f"- {i}")
 
-    # HTML 후처리
+            for issue in issues:
+                log(f"- {issue}")
+
     content = post_process_html(content)
 
-    # 이미지
     header_img = build_header_image_html(title, topic, category)
 
-    # disclaimer / CTA
     disclaimer_html = build_finance_disclaimer_html() if needs_finance_disclaimer(category, title, content) else ""
     cta_html = build_cta_html() if should_insert_cta(title, category, content) else ""
 
@@ -866,6 +916,7 @@ if __name__ == "__main__":
 
         if not CLAUDE_API_KEY:
             raise ValueError("Missing CLAUDE_API_KEY")
+
         if not BLOGGER_CLIENT_ID or not BLOGGER_CLIENT_SECRET or not BLOGGER_REFRESH_TOKEN or not BLOG_ID:
             raise ValueError("Missing Blogger credentials or BLOG_ID")
 
@@ -874,22 +925,20 @@ if __name__ == "__main__":
 
         title, final_content, meta_description, category, validation_passed, issues = generate_post(recent_titles)
 
-        # 고위험 카테고리는 강제 draft
         high_risk_draft_mode = category in HIGH_RISK_CATEGORIES
         final_draft_mode = DRAFT_MODE or high_risk_draft_mode
 
         log(f"High-risk draft mode: {high_risk_draft_mode}")
 
-        # 검증 실패 시 백업만 저장하고 중단
         if not validation_passed:
             save_local_html_backup(title, final_content)
             save_validation_report(title, issues)
             raise ValueError("Final content failed quality validation. Backup and validation report were saved.")
 
-        # 발행 전 백업
         save_local_html_backup(title, final_content)
 
         labels = build_labels(category, title, final_content)
+
         post_to_blogger(
             service=service,
             title=title,
