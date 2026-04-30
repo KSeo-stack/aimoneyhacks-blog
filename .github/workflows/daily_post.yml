@@ -2,8 +2,8 @@ name: Daily Blog Post
 
 on:
   schedule:
-    - cron: '0 1 * * *'
-  workflow_dispatch:
+    - cron: '0 1 * * *'  # 매일 한국 시간 오전 10시 실행
+  workflow_dispatch:      # 수동 실행 버튼 활성화
 
 jobs:
   post:
@@ -16,15 +16,13 @@ jobs:
         with:
           python-version: '3.11'
       
-      # 구글 블로거 및 웹 검색(팩트체크)용 필수 라이브러리 추가 설치
       - name: Install dependencies
-        run: pip install anthropic requests duckduckgo-search google-api-python-client google-auth-httplib2 google-auth-oauthlib
+        run: pip install anthropic requests ddgs google-api-python-client google-auth-httplib2 google-auth-oauthlib
       
       - name: Run blog post
         env:
           CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
-          # 기존 워드프레스 토큰 대신 블로거용 시크릿 4개 연결
           BLOGGER_CLIENT_ID: ${{ secrets.BLOGGER_CLIENT_ID }}
           BLOGGER_CLIENT_SECRET: ${{ secrets.BLOGGER_CLIENT_SECRET }}
           BLOGGER_REFRESH_TOKEN: ${{ secrets.BLOGGER_REFRESH_TOKEN }}
