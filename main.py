@@ -38,6 +38,7 @@ BLOG_ID = os.environ.get("BLOG_ID", "").strip()
 PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY", "").strip()
 
 DRAFT_MODE = os.environ.get("DRAFT_MODE", "true").strip().lower() in ("1", "true", "yes", "y")
+HIGH_RISK_DRAFT_MODE = os.environ.get("HIGH_RISK_DRAFT_MODE", "true").strip().lower() in ("1", "true", "yes", "y")
 
 BACKUP_DIR = Path("draft_backups")
 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
@@ -375,7 +376,7 @@ def merge_inline_style(tag_html: str, extra_style: str) -> str:
     if 'style="' in tag_html:
         return re.sub(
             r'style="([^"]*)"',
-            lambda m: f'style="{m.group(1).rstrip(';')}; {extra_style}"',
+            lambda m: 'style="' + m.group(1).rstrip(";") + f'; {extra_style}"',
             tag_html,
             count=1,
             flags=re.IGNORECASE
@@ -913,6 +914,7 @@ if __name__ == "__main__":
         log("🚀 Starting Automated Blog Pipeline...")
         log(f"Using Claude model: {CLAUDE_MODEL}")
         log(f"Draft mode from YAML: {DRAFT_MODE}")
+        log(f"High-risk draft mode from YAML: {HIGH_RISK_DRAFT_MODE}")
 
         if not CLAUDE_API_KEY:
             raise ValueError("Missing CLAUDE_API_KEY")
@@ -925,10 +927,10 @@ if __name__ == "__main__":
 
         title, final_content, meta_description, category, validation_passed, issues = generate_post(recent_titles)
 
-        high_risk_draft_mode = category in HIGH_RISK_CATEGORIES
+        high_risk_draft_mode = HIGH_RISK_DRAFT_MODE and category in HIGH_RISK_CATEGORIES
         final_draft_mode = DRAFT_MODE or high_risk_draft_mode
 
-        log(f"High-risk draft mode: {high_risk_draft_mode}")
+        log(f"High-risk draft mode applied: {high_risk_draft_mode}")
 
         if not validation_passed:
             save_local_html_backup(title, final_content)
