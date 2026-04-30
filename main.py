@@ -70,6 +70,12 @@ HIGH_RISK_CATEGORIES = {
     "Cybersecurity & Online Privacy",
 }
 
+CTA_ALLOWED_CATEGORIES = {
+    "B2B Software & SaaS Tools",
+    "Digital Marketing & E-commerce",
+    "Remote Work & Productivity Hacks",
+}
+
 BANNED_AI_PHRASES = [
     "in today's fast-paced digital landscape",
     "ever-evolving",
@@ -286,6 +292,8 @@ def topic_to_image_query(topic: str, category: str) -> str:
 
     if "dividend" in topic_lower:
         return "dividend investing finance"
+    if "emergency fund" in topic_lower:
+        return "personal finance savings"
     if "crm" in topic_lower:
         return "crm sales dashboard business"
     if "password manager" in topic_lower:
@@ -559,6 +567,9 @@ def post_process_html(content: str) -> str:
 # 6. CTA / Disclaimer / Labels
 # ==========================================
 def should_insert_cta(title: str, category: str, content: str) -> bool:
+    if category not in CTA_ALLOWED_CATEGORIES:
+        return False
+
     haystack = f"{title} {category} {re.sub(r'<[^>]+>', ' ', content)}".lower()
 
     related_keywords = [
@@ -571,8 +582,9 @@ def should_insert_cta(title: str, category: str, content: str) -> bool:
         "marketing",
         "productivity",
         "e-commerce",
-        "business",
         "crm",
+        "software",
+        "tool",
     ]
 
     return any(k in haystack for k in related_keywords)
@@ -610,7 +622,10 @@ def needs_finance_disclaimer(category: str, title: str, content: str) -> bool:
         "retirement",
         "tax",
         "brokerage",
-        "passive income"
+        "passive income",
+        "emergency fund",
+        "savings account",
+        "personal finance",
     ]
 
     return any(k in haystack for k in keywords)
@@ -621,8 +636,8 @@ def build_finance_disclaimer_html() -> str:
     <div style="background:#fff7ed; border-left:4px solid #f97316; padding:22px; margin-top:32px; border-radius:16px; color:#111827;">
         <p style="margin:0; color:#111827; line-height:1.8;">
             <strong>Note:</strong> This article is for educational purposes only and is not financial, tax, or legal advice.
-            Tax rules, account rules, state taxes, and household situations can vary.
-            Check current IRS guidance or speak with a qualified tax professional before making retirement account decisions.
+            Savings account terms, interest rates, tax treatment, account rules, and household situations can vary.
+            Consider checking current account terms or speaking with a qualified financial or tax professional before making personal financial decisions.
         </p>
     </div>
     """
@@ -638,6 +653,8 @@ def build_labels(category: str, title: str, content: str) -> List[str]:
     keyword_map = {
         "crm": "CRM",
         "dividend": "Dividend Investing",
+        "emergency fund": "Emergency Fund",
+        "savings": "Savings",
         "password": "Password Managers",
         "google shopping": "Google Ads",
         "remote work": "Remote Work",
