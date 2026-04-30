@@ -10,6 +10,7 @@ import urllib.parse
 import warnings
 
 from pathlib import Path
+import requests
 from ddgs import DDGS
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -18,6 +19,7 @@ from googleapiclient.errors import HttpError
 warnings.filterwarnings("ignore")
 
 CLAUDE_API_KEY = os.environ.get("CLAUDE_API_KEY")
+PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY")
 BLOGGER_CLIENT_ID = os.environ.get("BLOGGER_CLIENT_ID")
 BLOGGER_CLIENT_SECRET = os.environ.get("BLOGGER_CLIENT_SECRET")
 BLOGGER_REFRESH_TOKEN = os.environ.get("BLOGGER_REFRESH_TOKEN")
@@ -50,42 +52,52 @@ CATEGORY_CONFIG = {
     "Personal Finance & Investing": {
         "label": "Personal Finance",
         "secondary_labels": ["Investing", "Money Tips"],
-        "image_style": (
-            "muted green and cream palette, abstract financial dashboard, "
-            "soft chart shapes, coins, calm editorial finance style"
-        )
+        "pexels_fallback_keywords": [
+            "finance workspace",
+            "budget planning",
+            "investment planning",
+            "financial documents"
+        ]
     },
     "B2B Software & SaaS Tools": {
         "label": "SaaS",
         "secondary_labels": ["B2B Software", "Business Tools"],
-        "image_style": (
-            "soft blue and graphite palette, abstract SaaS dashboard panels, "
-            "workflow cards, modern software UI shapes"
-        )
+        "pexels_fallback_keywords": [
+            "business software",
+            "crm dashboard",
+            "office laptop",
+            "business analytics"
+        ]
     },
     "Cybersecurity & Online Privacy": {
         "label": "Cybersecurity",
         "secondary_labels": ["Online Privacy", "Security Guide"],
-        "image_style": (
-            "dark navy and violet palette, abstract shield, encrypted network nodes, "
-            "secure server blocks, privacy concept"
-        )
+        "pexels_fallback_keywords": [
+            "cybersecurity",
+            "data security",
+            "password security",
+            "server room"
+        ]
     },
     "Digital Marketing & E-commerce": {
         "label": "Digital Marketing",
         "secondary_labels": ["Ecommerce", "Marketing Strategy"],
-        "image_style": (
-            "warm coral and soft yellow palette, abstract analytics dashboard, "
-            "ecommerce funnel shapes, product grid concept"
-        )
+        "pexels_fallback_keywords": [
+            "digital marketing",
+            "ecommerce business",
+            "online shopping",
+            "marketing analytics"
+        ]
     },
     "Remote Work & Productivity Hacks": {
         "label": "Remote Work",
         "secondary_labels": ["Productivity", "Work From Home"],
-        "image_style": (
-            "warm beige and sky blue palette, minimal workspace, calendar blocks, "
-            "productivity dashboard, remote work setup"
-        )
+        "pexels_fallback_keywords": [
+            "remote work",
+            "home office",
+            "productivity workspace",
+            "desk laptop"
+        ]
     }
 }
 
@@ -266,6 +278,9 @@ def validate_env():
 
     if missing:
         raise ValueError(f"Missing required environment variables: {', '.join(missing)}")
+
+    if not PEXELS_API_KEY:
+        print("⚠️ PEXELS_API_KEY is missing. The post will be published without a header image.")
 
 
 def execute_google_request_with_retries(request, action_name="Google API request", max_retries=5):
@@ -931,28 +946,95 @@ def save_local_backup(title, content, description, category, validation_report):
     return html_path, json_path
 
 
-def generate_ai_image_url(topic_prompt, category):
-    topic_prompt = (topic_prompt or "professional business concept")[:300]
+def clean_pexels_keyword(keyword, category):
+    keyword = (keyword or "").strip()
+    keyword = re.sub(r"[^a-zA-Z0-9\s-]", " ", keyword)
+    keyword = re.sub(r"\s+", " ", keyword).strip()
 
-    category_style = CATEGORY_CONFIG.get(category, {}).get(
-        "image_style",
-        "minimal professional editorial illustration, muted color palette"
-    )
+    if len(keyword.split()) > 5:
+        keyword = " ".join(keyword.split()[:5])
 
-    design_style = (
-        "minimalist professional digital illustration, matte texture, soft studio lighting, "
-        "flat editorial design, no glossy surfaces, no human faces, no generic robots, "
-        "no text, no logos, clean composition, modern blog hero image, balanced composition"
-    )
+    if not keyword:
+        fallback_keywords = CATEGORY_CONFIG.get(category, {}).get("pexels_fallback_keywords", ["business workspace"])
+        keyword = fallback_keywords[0]
 
-    final_prompt = f"{topic_prompt}, {category_style}, {design_style}"
-    encoded_prompt = urllib.parse.quote(final_prompt)
-    seed = random.randint(1, 99999)
+    return keyword
 
-    return (
-        f"https://image.pollinations.ai/prompt/{encoded_prompt}"
-        f"?seed={seed}&width=1280&height=720&nologo=true"
-    )
+
+def get_pexels_image(image_keyword, category):
+    if not PEXELS_API_KEY:
+        return None
+
+    fallback_keywords = CATEGORY_CONFIG.get(category, {}).get("pexels_fallback_keywords", ["business workspace"])
+    search_keywords = dedupe_preserve_order([clean_pexels_keyword(image_keyword, category)] + fallback_keywords)
+
+    headers = {
+        "Authorization": PEXELS_API_KEY
+    }
+
+    for keyword in search_keywords:
+        try:
+            print(f"Searching Pexels image: {keyword}")
+
+            response = requests.get(
+                "https://api.pexels.com/v1/search",
+                params={
+                    "query": keyword,
+                    "per_page": 8,
+                    "orientation": "landscape"
+                },
+                headers=headers,
+                timeout=15
+            )
+
+            if response.status_code != 200:
+                print(f"⚠️ Pexels request failed for '{keyword}': HTTP {response.status_code}")
+                continue
+
+            data = response.json()
+            photos = data.get("photos", [])
+
+            if not photos:
+                continue
+
+            selected_photo = random.choice(photos[:5])
+
+            return {
+                "image_url": selected_photo["src"].get("large2x") or selected_photo["src"].get("large"),
+                "photographer": selected_photo.get("photographer", "Pexels Creator"),
+                "photographer_url": selected_photo.get("photographer_url", ""),
+                "pexels_url": selected_photo.get("url", ""),
+                "keyword": keyword
+            }
+
+        except Exception as e:
+            print(f"⚠️ Pexels image fetch failed for '{keyword}': {e}")
+
+    return None
+
+
+def build_header_image_html(title, image_keyword, category):
+    image_data = get_pexels_image(image_keyword, category)
+
+    if not image_data:
+        print("⚠️ No Pexels image found. Continuing without header image.")
+        return ""
+
+    safe_alt = html.escape(title, quote=True)
+    safe_image_url = html.escape(image_data["image_url"], quote=True)
+    safe_photographer = html.escape(image_data["photographer"])
+    safe_photographer_url = html.escape(image_data["photographer_url"], quote=True)
+    safe_pexels_url = html.escape(image_data["pexels_url"], quote=True)
+
+    return f"""
+    <div style="margin-bottom:30px;">
+        <img src="{safe_image_url}" style="width:100%; border-radius:8px;" alt="{safe_alt}"/>
+        <p style="font-size:12px; color:#6b7280; margin-top:8px;">
+            Photo by <a href="{safe_photographer_url}" target="_blank" rel="noopener">{safe_photographer}</a> on
+            <a href="{safe_pexels_url}" target="_blank" rel="noopener">Pexels</a>
+        </p>
+    </div>
+    """
 
 
 def dedupe_preserve_order(items):
@@ -1189,12 +1271,12 @@ SEO AND QUALITY RULES:
 20. Do not convert monthly prices into annual prices unless the math and billing basis are explicit in REFERENCE_DATA.
 21. Do not write "top-rated", "market-leading", "industry-leading", or "leads on" unless the ranking is explicitly supported in REFERENCE_DATA. Prefer "commonly reviewed" or "often considered".
 22. <DESCRIPTION> must be under 160 characters.
-23. <IMAGE_PROMPT> must describe a minimalist, matte digital art piece for this topic. No faces. No text. No logos.
+23. <IMAGE_KEYWORD> must be 2-5 simple English words for a Pexels photo search. No brand names. No abstract AI-art phrases. Examples: "business software", "office laptop", "remote work", "marketing analytics".
 
 Return EXACTLY the XML format below and nothing else.
 
 <TITLE>catchy SEO title</TITLE>
-<IMAGE_PROMPT>minimalist matte image prompt</IMAGE_PROMPT>
+<IMAGE_KEYWORD>pexels search keyword</IMAGE_KEYWORD>
 <DESCRIPTION>meta description under 160 characters</DESCRIPTION>
 <CONTENT>full HTML article</CONTENT>
 """
@@ -1202,7 +1284,7 @@ Return EXACTLY the XML format below and nothing else.
 
 def parse_article_response(response_text, topic):
     title = extract_xml(response_text, "TITLE", f"{topic} in 2026")
-    image_prompt = extract_xml(response_text, "IMAGE_PROMPT", topic)
+    image_keyword = extract_xml(response_text, "IMAGE_KEYWORD", "business workspace")
     description = extract_xml(
         response_text,
         "DESCRIPTION",
@@ -1214,10 +1296,11 @@ def parse_article_response(response_text, topic):
         raise ValueError("Claude response missing CONTENT tag. Refusing to publish broken post.")
 
     title = clean_title(title, f"{topic} in 2026")
+    image_keyword = clean_pexels_keyword(image_keyword, "B2B Software & SaaS Tools")
     content = clean_html_content(content, title)
     description = description[:160]
 
-    return title, image_prompt, description, content
+    return title, image_keyword, description, content
 
 
 def generate_post(recent_titles):
@@ -1308,7 +1391,7 @@ Rules:
     )
 
     response2 = msg2.content[0].text
-    title, image_prompt, description, content = parse_article_response(response2, topic)
+    title, image_keyword, description, content = parse_article_response(response2, topic)
 
     issues = validate_content_quality(title, content, context)
 
@@ -1341,7 +1424,7 @@ Rules:
         )
 
         response_revision = msg_revision.content[0].text
-        title, image_prompt, description, content = parse_article_response(response_revision, topic)
+        title, image_keyword, description, content = parse_article_response(response_revision, topic)
         issues = validate_content_quality(title, content, context)
 
     validation_passed = len(issues) == 0
@@ -1351,14 +1434,7 @@ Rules:
         for issue in issues:
             print(f"- {issue}")
 
-    image_url = generate_ai_image_url(image_prompt, category)
-    safe_alt = html.escape(title, quote=True)
-
-    header_image = f"""
-    <div style="margin-bottom:30px;">
-        <img src="{image_url}" style="width:100%; border-radius:8px;" alt="{safe_alt}"/>
-    </div>
-    """
+    header_image = build_header_image_html(title, image_keyword, category)
 
     disclaimer = get_disclaimer_for_category(category)
     cta = get_cta_for_category(category)
@@ -1368,6 +1444,7 @@ Rules:
     print(f"Generated title: {title}")
     print(f"Meta description: {description}")
     print(f"Word count: {count_words_from_html(content)}")
+    print(f"Pexels keyword: {image_keyword}")
     print(f"Disclaimer inserted: {'Yes' if disclaimer else 'No'}")
     print(f"CTA inserted: {'Yes' if cta else 'No'}")
     print(f"Validation passed: {validation_passed}")
