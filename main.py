@@ -7,7 +7,7 @@ import html
 import warnings
 import datetime
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 
 import requests
 import anthropic
@@ -93,26 +93,6 @@ GUESS_PRICING_PATTERNS = [
     r"\$[\d,]+(?:\.\d+)?\s*(?:-|–|—|to)\s*\$?[\d,]+(?:\.\d+)?",
 ]
 
-FINANCE_DISCLAIMER_PATTERNS = [
-    r"\bpersonal finance\b",
-    r"\bemergency fund\b",
-    r"\bsavings account(s)?\b",
-    r"\bhigh-yield savings\b",
-    r"\binvest(?:ing|ment|ments|or|ors|ed|s)?\b",
-    r"\bdividend(s)?\b",
-    r"\broth\b",
-    r"\bira\b",
-    r"\b401k\b",
-    r"\b401\(k\)\b",
-    r"\betf(s)?\b",
-    r"\bstock(s)?\b",
-    r"\bportfolio(s)?\b",
-    r"\bretirement\b",
-    r"\btax(?:es|able|ation)?\b",
-    r"\bbrokerage\b",
-    r"\bpassive income\b",
-]
-
 
 # ==========================================
 # 1. 공용 유틸
@@ -125,7 +105,7 @@ def sanitize_filename(text: str, max_len: int = 80) -> str:
     text = re.sub(r"[^\w\s\-]", "", text, flags=re.UNICODE)
     text = re.sub(r"\s+", " ", text).strip()
     text = text[:max_len].strip()
-    return text.replace(" ", "_")
+    return text.replace(" ", "_") or "untitled"
 
 
 def save_local_html_backup(title: str, content: str) -> Path:
@@ -137,35 +117,52 @@ def save_local_html_backup(title: str, content: str) -> Path:
     return path
 
 
-def save_validation_report(title: str, issues: List[str]) -> Path:
+def save_validation_report(title: str, issues: List[str], extra: Optional[Dict] = None) -> Path:
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_title = sanitize_filename(title)
     path = BACKUP_DIR / f"{timestamp}_{safe_title}_validation_report.json"
+
     payload = {
         "title": title,
         "issues": issues,
         "created_at": datetime.datetime.now().isoformat(),
     }
+
+    if extra:
+        payload.update(extra)
+
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     log(f"✅ Validation report saved: {path}")
     return path
 
 
-def extract_tag(text: str, tag: str) -> str:
+def extract_tag(text: str, tag: str, required: bool = True, default: str = "") -> str:
     pattern = rf"<{tag}>(.*?)</{tag}>"
-    match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
+    match = re.search(pattern, text or "", re.DOTALL | re.IGNORECASE)
+
     if not match:
-        raise ValueError(f"Missing tag: {tag}")
+        if required:
+            raise ValueError(f"Missing tag: {tag}")
+        return default
+
     return match.group(1).strip()
 
 
 def word_count(text: str) -> int:
-    clean = re.sub(r"<[^>]+>", " ", text)
+    clean = re.sub(r"<[^>]+>", " ", text or "")
+    clean = html.unescape(clean)
     clean = re.sub(r"\s+", " ", clean).strip()
     return len(clean.split())
 
 
-def with_retry(func, max_attempts=4, base_sleep=2, retriable_statuses=(429, 500, 503)):
+def strip_html(text: str) -> str:
+    clean = re.sub(r"<[^>]+>", " ", text or "")
+    clean = html.unescape(clean)
+    clean = re.sub(r"\s+", " ", clean).strip()
+    return clean
+
+
+def with_retry(func, max_attempts=4, base_sleep=2, retriable_statuses=(429, 500, 502, 503, 504)):
     last_error = None
 
     for attempt in range(1, max_attempts + 1):
@@ -179,8 +176,8 @@ def with_retry(func, max_attempts=4, base_sleep=2, retriable_statuses=(429, 500,
             if status not in retriable_statuses or attempt == max_attempts:
                 raise
 
-            sleep_s = base_sleep * attempt
-            log(f"⚠️ Blogger API temporary error ({status}). Retry {attempt}/{max_attempts} in {sleep_s}s...")
+            sleep_s = base_sleep * attempt + random.uniform(0, 1)
+            log(f"⚠️ Blogger API temporary error ({status}). Retry {attempt}/{max_attempts} in {sleep_s:.1f}s...")
             time.sleep(sleep_s)
 
         except requests.RequestException as e:
@@ -189,12 +186,34 @@ def with_retry(func, max_attempts=4, base_sleep=2, retriable_statuses=(429, 500,
             if attempt == max_attempts:
                 raise
 
-            sleep_s = base_sleep * attempt
-            log(f"⚠️ Network error. Retry {attempt}/{max_attempts} in {sleep_s}s...")
+            sleep_s = base_sleep * attempt + random.uniform(0, 1)
+            log(f"⚠️ Network error. Retry {attempt}/{max_attempts} in {sleep_s:.1f}s...")
             time.sleep(sleep_s)
 
     if last_error:
         raise last_error
+
+
+def validate_env():
+    missing = []
+
+    required = {
+        "CLAUDE_API_KEY": CLAUDE_API_KEY,
+        "BLOGGER_CLIENT_ID": BLOGGER_CLIENT_ID,
+        "BLOGGER_CLIENT_SECRET": BLOGGER_CLIENT_SECRET,
+        "BLOGGER_REFRESH_TOKEN": BLOGGER_REFRESH_TOKEN,
+        "BLOG_ID": BLOG_ID,
+    }
+
+    for key, value in required.items():
+        if not value:
+            missing.append(key)
+
+    if missing:
+        raise ValueError(f"Missing required environment variables: {', '.join(missing)}")
+
+    if not PEXELS_API_KEY:
+        log("⚠️ PEXELS_API_KEY is missing. Posts will be created without hero images.")
 
 
 # ==========================================
@@ -239,7 +258,7 @@ def post_to_blogger(service, title: str, content: str, labels: List[str], is_dra
     body = {
         "title": title,
         "content": content,
-        "labels": labels
+        "labels": labels,
     }
 
     log(f"Publishing to Blogger... Draft mode: {is_draft}")
@@ -266,6 +285,48 @@ def post_to_blogger(service, title: str, content: str, labels: List[str], is_dra
 # ==========================================
 # 3. 검색 / 참고 데이터
 # ==========================================
+def build_extra_search_queries(topic: str, category: str, query1: str, query2: str) -> List[str]:
+    text = f"{topic} {category} {query1} {query2}".lower()
+    queries = [query1, query2]
+
+    if any(k in text for k in ["vpn", "zero trust", "ztna", "cybersecurity", "privacy"]):
+        queries.extend([
+            f"{topic} official guidance",
+            f"site:nist.gov {topic}",
+            f"site:cisa.gov {topic}",
+        ])
+
+    if any(k in text for k in ["crm", "sales pipeline", "b2b sales", "saas"]):
+        queries.extend([
+            f"{topic} CRM automation guide",
+            f"{topic} sales workflow automation",
+        ])
+
+    if any(k in text for k in ["dividend", "emergency fund", "savings", "roth", "ira", "tax"]):
+        queries.extend([
+            f"{topic} investor education",
+            f"{topic} consumer finance guide",
+        ])
+
+    if any(k in text for k in ["google shopping", "google ads", "ppc", "cpc", "roas"]):
+        queries.extend([
+            "site:support.google.com/google-ads shopping campaigns setup",
+            "site:support.google.com/google-ads campaign budgets",
+        ])
+
+    deduped = []
+    seen = set()
+
+    for q in queries:
+        q = q.strip()
+        lower = q.lower()
+        if q and lower not in seen:
+            deduped.append(q)
+            seen.add(lower)
+
+    return deduped[:8]
+
+
 def get_real_time_context(queries: List[str], max_results: int = 4) -> str:
     context_blocks = []
 
@@ -281,9 +342,9 @@ def get_real_time_context(queries: List[str], max_results: int = 4) -> str:
                     results = []
 
                 for r in results:
-                    title = r.get("title", "").strip()
-                    body = r.get("body", "").strip()
-                    href = r.get("href", "").strip()
+                    title = (r.get("title") or "").strip()
+                    body = (r.get("body") or "").strip()
+                    href = (r.get("href") or "").strip()
 
                     if title or body:
                         context_blocks.append(
@@ -301,7 +362,7 @@ def get_real_time_context(queries: List[str], max_results: int = 4) -> str:
             "Avoid exact pricing, exact tax numbers, exact performance claims, and unsupported rankings."
         )
 
-    return "\n---\n".join(context_blocks[:12])
+    return "\n---\n".join(context_blocks[:14])
 
 
 # ==========================================
@@ -316,19 +377,21 @@ def topic_to_image_query(topic: str, category: str) -> str:
         return "personal finance savings"
     if "crm" in topic_lower:
         return "crm sales dashboard business"
+    if "sales pipeline" in topic_lower:
+        return "sales team business meeting"
     if "password manager" in topic_lower:
         return "cybersecurity password laptop"
+    if "vpn" in topic_lower or "zero trust" in topic_lower or "ztna" in topic_lower:
+        return "cybersecurity laptop privacy"
     if "google shopping" in topic_lower:
         return "ecommerce online store marketing"
     if "remote work" in topic_lower or "productivity" in topic_lower:
         return "remote work productivity desk"
-    if "sales pipeline" in topic_lower:
-        return "sales team business meeting"
 
     if category == "Personal Finance & Investing":
         return "personal finance investing"
     if category == "B2B Software & SaaS Tools":
-        return "saas software business dashboard"
+        return "business software laptop"
     if category == "Cybersecurity & Online Privacy":
         return "cybersecurity privacy laptop"
     if category == "Digital Marketing & E-commerce":
@@ -336,7 +399,7 @@ def topic_to_image_query(topic: str, category: str) -> str:
     if category == "Remote Work & Productivity Hacks":
         return "productivity workspace"
 
-    return topic
+    return "business workspace"
 
 
 def get_pexels_image(search_query: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
@@ -363,7 +426,7 @@ def get_pexels_image(search_query: str) -> Tuple[Optional[str], Optional[str], O
             log("⚠️ No Pexels image found.")
             return None, None, None
 
-        chosen = photos[0]
+        chosen = random.choice(photos[:5])
         src = chosen.get("src", {})
 
         image_url = src.get("large2x") or src.get("large") or src.get("original")
@@ -384,9 +447,9 @@ def build_header_image_html(title: str, topic: str, category: str) -> str:
     if not image_url:
         return ""
 
-    alt_text = html.escape(title)
+    alt_text = html.escape(title, quote=True)
     photographer_html = html.escape(photographer or "Unknown")
-    photo_page_html = html.escape(photo_page or "https://www.pexels.com/")
+    photo_page_html = html.escape(photo_page or "https://www.pexels.com/", quote=True)
 
     return f"""
     <div style="margin: 0 0 28px 0;">
@@ -434,7 +497,7 @@ def remove_wrong_finance_disclaimer(content: str, category: str) -> str:
     content = disclaimer_div_pattern.sub("", content)
 
     plain_disclaimer_pattern = re.compile(
-        r"Note:\s*This article is for educational purposes only and is not financial, tax, or legal advice\..*?(decisions\.|situation\.)",
+        r"Note:\s*This article is for educational purposes only and is not financial, tax, or legal advice\..*?(decisions\.|situation\.|advisor\.)",
         re.IGNORECASE | re.DOTALL
     )
 
@@ -635,7 +698,7 @@ def should_insert_cta(title: str, category: str, content: str) -> bool:
     if category not in CTA_ALLOWED_CATEGORIES:
         return False
 
-    haystack = f"{title} {category} {re.sub(r'<[^>]+>', ' ', content)}".lower()
+    haystack = f"{title} {category} {strip_html(content)}".lower()
 
     related_keywords = [
         "ai",
@@ -650,6 +713,7 @@ def should_insert_cta(title: str, category: str, content: str) -> bool:
         "crm",
         "software",
         "tool",
+        "sales pipeline",
     ]
 
     return any(k in haystack for k in related_keywords)
@@ -671,16 +735,7 @@ def build_cta_html() -> str:
 
 
 def needs_finance_disclaimer(category: str, title: str, content: str) -> bool:
-    if category == "Personal Finance & Investing":
-        return True
-
-    haystack = f"{title} {re.sub(r'<[^>]+>', ' ', content)}".lower()
-
-    for pattern in FINANCE_DISCLAIMER_PATTERNS:
-        if re.search(pattern, haystack, flags=re.IGNORECASE):
-            return True
-
-    return False
+    return category == "Personal Finance & Investing"
 
 
 def build_finance_disclaimer_html() -> str:
@@ -698,13 +753,16 @@ def build_finance_disclaimer_html() -> str:
 def build_labels(category: str, title: str, content: str) -> List[str]:
     base = CATEGORY_LABELS.get(category, ["2026 Guide"])
 
-    text = f"{title} {re.sub(r'<[^>]+>', ' ', content)}".lower()
+    text = f"{title} {strip_html(content)}".lower()
 
     extras = []
 
     keyword_map = {
         "crm": "CRM",
         "sales pipeline": "Sales Automation",
+        "zero trust": "Zero Trust",
+        "ztna": "Zero Trust",
+        "vpn": "VPN",
         "dividend": "Dividend Investing",
         "emergency fund": "Emergency Fund",
         "savings": "Savings",
@@ -728,12 +786,12 @@ def build_labels(category: str, title: str, content: str) -> List[str]:
 # ==========================================
 # 7. 품질 검증
 # ==========================================
-def validate_content_quality(title: str, content: str) -> List[str]:
+def validate_content_quality(title: str, content: str, category: str) -> List[str]:
     issues = []
 
     wc = word_count(content)
 
-    if wc < 900:
+    if wc < 850:
         issues.append(f"Word count too low: {wc}")
 
     title_clean = title.strip()
@@ -741,7 +799,7 @@ def validate_content_quality(title: str, content: str) -> List[str]:
     if len(title_clean) < 35:
         issues.append("Title too short")
 
-    lowered = re.sub(r"<[^>]+>", " ", content).lower()
+    lowered = strip_html(content).lower()
 
     for phrase in BANNED_AI_PHRASES:
         if phrase in lowered:
@@ -759,6 +817,10 @@ def validate_content_quality(title: str, content: str) -> List[str]:
 
     if "practical action plan" not in lowered and "action plan" not in lowered:
         issues.append("Missing action plan section")
+
+    if category != "Personal Finance & Investing":
+        if "not financial, tax, or legal advice" in lowered:
+            issues.append("Wrong finance disclaimer found in non-finance category")
 
     return issues
 
@@ -780,7 +842,8 @@ Rules:
 3. The topic must be practical and genuinely useful.
 4. Avoid clickbait.
 5. Avoid exact pricing topics unless pricing can be handled carefully with "pricing varies" language.
-6. Return XML only with:
+6. Avoid repeating topics already covered in recent titles.
+7. Return XML only with:
 <TOPIC>...</TOPIC>
 <QUERY1>...</QUERY1>
 <QUERY2>...</QUERY2>
@@ -795,9 +858,11 @@ def build_content_prompt(topic: str, category: str, fmt: str, reference_data: st
     if high_risk:
         extra_rule = """
 IMPORTANT RISK RULE:
-- Do NOT invent exact prices, yields, returns, tax outcomes, or security claims.
+- Do NOT invent exact prices, yields, returns, tax outcomes, breach statistics, legal claims, or security guarantees.
 - If exact pricing or numbers are not clearly supported by the reference data, say: "Pricing varies by plan, billing term, and vendor."
-- For financial or tax topics, stay educational and general. Do not give personalized advice.
+- For financial topics, stay educational and general. Do not give personalized advice.
+- For cybersecurity topics, avoid guarantees such as "fully protects", "guaranteed secure", or "anonymous".
+- Do NOT add a finance/tax disclaimer unless the category is Personal Finance & Investing.
 """
 
     return f"""
@@ -827,6 +892,7 @@ Writing style rules:
 - No unsupported exact numbers.
 - No markdown. Return clean HTML inside CONTENT.
 - Do NOT repeat the title inside CONTENT. Blogger already displays the title.
+- Do NOT include any disclaimer inside CONTENT. The system adds disclaimers separately only when needed.
 
 Structure rules:
 1. <TITLE> should be SEO-friendly and natural. No excessive hype.
@@ -876,9 +942,10 @@ Rules:
 - If pricing is uncertain, use generic wording like "Pricing varies by plan, billing term, and vendor."
 - Preserve the blog structure.
 - Do NOT repeat the title inside CONTENT.
+- Do NOT include disclaimers inside CONTENT.
 - Keep HTML clean.
+- Return XML only.
 
-Return XML only:
 <TITLE>...</TITLE>
 <META_DESCRIPTION>...</META_DESCRIPTION>
 <CONTENT>...</CONTENT>
@@ -888,6 +955,25 @@ Current content:
 {content}
 </CONTENT_BLOCK>
 """
+
+
+def call_claude(client, prompt: str, max_tokens: int = 4000):
+    return client.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=max_tokens,
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+
+def parse_article_xml(raw: str, fallback_title: str = "Untitled Article") -> Tuple[str, str, str]:
+    title = extract_tag(raw, "TITLE", required=False, default=fallback_title)
+    meta_description = extract_tag(raw, "META_DESCRIPTION", required=False, default="")
+    content = extract_tag(raw, "CONTENT", required=True)
+
+    title = re.sub(r"\s+", " ", title).strip()
+    meta_description = re.sub(r"\s+", " ", meta_description).strip()[:160]
+
+    return title, meta_description, content
 
 
 def generate_post(recent_titles: List[str]) -> Tuple[str, str, str, str, bool, List[str]]:
@@ -901,10 +987,10 @@ def generate_post(recent_titles: List[str]) -> Tuple[str, str, str, str, bool, L
 
     recent_titles_str = ", ".join(recent_titles) if recent_titles else "None"
 
-    topic_resp = client.messages.create(
-        model=CLAUDE_MODEL,
-        max_tokens=500,
-        messages=[{"role": "user", "content": build_topic_prompt(category, fmt, recent_titles_str)}],
+    topic_resp = call_claude(
+        client,
+        build_topic_prompt(category, fmt, recent_titles_str),
+        max_tokens=500
     )
 
     topic_text = topic_resp.content[0].text
@@ -915,24 +1001,42 @@ def generate_post(recent_titles: List[str]) -> Tuple[str, str, str, str, bool, L
 
     log(f"Generated topic: {topic}")
 
-    reference_data = get_real_time_context([query1, query2])
+    search_queries = build_extra_search_queries(topic, category, query1, query2)
+    reference_data = get_real_time_context(search_queries)
 
-    content_resp = client.messages.create(
-        model=CLAUDE_MODEL,
-        max_tokens=4000,
-        messages=[{"role": "user", "content": build_content_prompt(topic, category, fmt, reference_data)}],
-    )
+    raw = ""
 
-    raw = content_resp.content[0].text
+    try:
+        content_resp = call_claude(
+            client,
+            build_content_prompt(topic, category, fmt, reference_data),
+            max_tokens=4000
+        )
+        raw = content_resp.content[0].text
+        title, meta_description, content = parse_article_xml(raw, fallback_title=topic)
 
-    title = extract_tag(raw, "TITLE")
-    meta_description = extract_tag(raw, "META_DESCRIPTION")
-    content = extract_tag(raw, "CONTENT")
+    except Exception as e:
+        log(f"⚠️ Initial XML parse failed: {e}. Retrying once with stricter XML prompt...")
+
+        retry_prompt = build_content_prompt(topic, category, fmt, reference_data) + """
+
+CRITICAL XML RETRY:
+Your previous response was not parseable.
+Return only:
+<TITLE>...</TITLE>
+<META_DESCRIPTION>...</META_DESCRIPTION>
+<CONTENT>...</CONTENT>
+No commentary. No markdown.
+"""
+
+        content_resp = call_claude(client, retry_prompt, max_tokens=4000)
+        raw = content_resp.content[0].text
+        title, meta_description, content = parse_article_xml(raw, fallback_title=topic)
 
     content = remove_duplicate_title_from_content(content, title)
     content = remove_wrong_finance_disclaimer(content, category)
 
-    issues = validate_content_quality(title, content)
+    issues = validate_content_quality(title, content, category)
     validation_passed = len(issues) == 0
 
     if issues:
@@ -941,22 +1045,23 @@ def generate_post(recent_titles: List[str]) -> Tuple[str, str, str, str, bool, L
         for issue in issues:
             log(f"- {issue}")
 
-        revision_resp = client.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=4000,
-            messages=[{"role": "user", "content": build_revision_prompt(title, content, issues, category)}],
+        revision_resp = call_claude(
+            client,
+            build_revision_prompt(title, content, issues, category),
+            max_tokens=4000
         )
 
         revised = revision_resp.content[0].text
 
-        title = extract_tag(revised, "TITLE")
-        meta_description = extract_tag(revised, "META_DESCRIPTION")
-        content = extract_tag(revised, "CONTENT")
+        try:
+            title, meta_description, content = parse_article_xml(revised, fallback_title=title)
+        except Exception as e:
+            log(f"⚠️ Revision XML parse failed: {e}. Keeping previous draft.")
 
         content = remove_duplicate_title_from_content(content, title)
         content = remove_wrong_finance_disclaimer(content, category)
 
-        issues = validate_content_quality(title, content)
+        issues = validate_content_quality(title, content, category)
         validation_passed = len(issues) == 0
 
         if issues:
@@ -972,14 +1077,17 @@ def generate_post(recent_titles: List[str]) -> Tuple[str, str, str, str, bool, L
     disclaimer_html = build_finance_disclaimer_html() if needs_finance_disclaimer(category, title, content) else ""
     cta_html = build_cta_html() if should_insert_cta(title, category, content) else ""
 
+    final_content = header_img + content + disclaimer_html + cta_html
+
+    # 마지막 안전장치: 비금융 카테고리에서 금융 disclaimer가 끼어 있으면 강제 제거
+    final_content = remove_wrong_finance_disclaimer(final_content, category)
+
     log(f"Generated title: {title}")
     log(f"Meta description: {meta_description}")
     log(f"Word count: {word_count(content)}")
     log(f"Disclaimer inserted: {'Yes' if disclaimer_html else 'No'}")
     log(f"CTA inserted: {'Yes' if cta_html else 'No'}")
     log(f"Validation passed: {validation_passed}")
-
-    final_content = header_img + content + disclaimer_html + cta_html
 
     return title, final_content, meta_description, category, validation_passed, issues
 
@@ -994,11 +1102,7 @@ if __name__ == "__main__":
         log(f"Draft mode from YAML: {DRAFT_MODE}")
         log(f"High-risk draft mode from YAML: {HIGH_RISK_DRAFT_MODE}")
 
-        if not CLAUDE_API_KEY:
-            raise ValueError("Missing CLAUDE_API_KEY")
-
-        if not BLOGGER_CLIENT_ID or not BLOGGER_CLIENT_SECRET or not BLOGGER_REFRESH_TOKEN or not BLOG_ID:
-            raise ValueError("Missing Blogger credentials or BLOG_ID")
+        validate_env()
 
         service = get_blogger_service()
         recent_titles = get_recent_posts(service)
@@ -1010,12 +1114,19 @@ if __name__ == "__main__":
 
         log(f"High-risk draft mode applied: {high_risk_draft_mode}")
 
-        if not validation_passed:
-            save_local_html_backup(title, final_content)
-            save_validation_report(title, issues)
-            raise ValueError("Final content failed quality validation. Backup and validation report were saved.")
-
         save_local_html_backup(title, final_content)
+
+        if not validation_passed:
+            save_validation_report(
+                title,
+                issues,
+                extra={
+                    "category": category,
+                    "draft_mode": final_draft_mode,
+                    "meta_description": meta_description,
+                }
+            )
+            raise ValueError("Final content failed quality validation. Backup and validation report were saved.")
 
         labels = build_labels(category, title, final_content)
 
