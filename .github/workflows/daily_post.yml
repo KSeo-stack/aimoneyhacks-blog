@@ -9,10 +9,10 @@ jobs:
 
     steps:
       - name: 📂 Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: 🐍 Setup Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
@@ -30,6 +30,7 @@ jobs:
           BLOGGER_REFRESH_TOKEN: ${{ secrets.BLOGGER_REFRESH_TOKEN }}
           BLOG_ID: ${{ secrets.BLOG_ID }}
           DRAFT_MODE: "true"
+          HIGH_RISK_DRAFT_MODE: "true"
         run: python main.py
 
       - name: 📦 Upload draft backup
@@ -37,5 +38,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: draft-backups
-          path: draft_backups/*.html
+          path: draft_backups/*
           if-no-files-found: ignore
