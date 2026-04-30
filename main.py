@@ -4,12 +4,15 @@ import html
 import os
 import random
 import re
+import time
 import urllib.parse
 import warnings
 
+from pathlib import Path
 from ddgs import DDGS
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 warnings.filterwarnings("ignore")
 
@@ -19,10 +22,7 @@ BLOGGER_CLIENT_SECRET = os.environ.get("BLOGGER_CLIENT_SECRET")
 BLOGGER_REFRESH_TOKEN = os.environ.get("BLOGGER_REFRESH_TOKEN")
 BLOG_ID = os.environ.get("BLOG_ID")
 
-# GitHub Secret에 CLAUDE_MODEL이 없으면 기본 모델 사용
 CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL") or "claude-sonnet-4-6"
-
-# YAML에서 true/false로 제어
 DRAFT_MODE = os.environ.get("DRAFT_MODE", "true").lower() == "true"
 
 CTA_INSERT_RATE = 0.60
@@ -137,6 +137,28 @@ def validate_env():
         raise ValueError(f"Missing required environment variables: {', '.join(missing)}")
 
 
+def execute_google_request_with_retries(request, action_name="Google API request", max_retries=5):
+    retryable_status_codes = {429, 500, 502, 503, 504}
+
+    for attempt in range(max_retries):
+        try:
+            return request.execute()
+
+        except HttpError as e:
+            status = getattr(e.resp, "status", None)
+
+            if status in retryable_status_codes and attempt < max_retries - 1:
+                delay = (2 ** attempt) + random.uniform(0, 1.5)
+                print(
+                    f"⚠️ {action_name} failed with HTTP {status}. "
+                    f"Retrying in {delay:.1f}s... ({attempt + 1}/{max_retries})"
+                )
+                time.sleep(delay)
+                continue
+
+            raise
+
+
 def extract_xml(text, tag, fallback=""):
     match = re.search(rf"<{tag}>(.*?)</{tag}>", text, re.DOTALL)
 
@@ -157,10 +179,8 @@ def clean_html_content(content, title=""):
     if not content:
         return ""
 
-    # Blogger 제목과 중복되는 H1 제거
     content = re.sub(r"<h1.*?>.*?</h1>", "", content, flags=re.DOTALL | re.IGNORECASE)
 
-    # Claude가 CONTENT 맨 앞에 제목을 일반 텍스트나 p 태그로 다시 넣는 경우 제거
     if title:
         plain_title = re.escape(title.strip())
 
@@ -356,7 +376,11 @@ def get_recent_posts(service):
             status="LIVE"
         )
 
-        response = request.execute()
+        response = execute_google_request_with_retries(
+            request,
+            action_name="Fetch recent Blogger posts"
+        )
+
         items = response.get("items", [])
         titles = [item.get("title", "") for item in items if item.get("title")]
 
@@ -381,13 +405,48 @@ def post_to_blogger(service, title, content, category, description):
     print(f"Publishing to Blogger... Draft mode: {DRAFT_MODE}")
     print(f"Labels: {labels}")
 
-    service.posts().insert(
+    request = service.posts().insert(
         blogId=BLOG_ID,
         body=body,
         isDraft=DRAFT_MODE
-    ).execute()
+    )
+
+    execute_google_request_with_retries(
+        request,
+        action_name="Publish Blogger post"
+    )
 
     print("✅ Post published successfully." if not DRAFT_MODE else "✅ Draft saved successfully.")
+
+
+def save_local_backup(title, content, description, category):
+    backup_dir = Path("draft_backups")
+    backup_dir.mkdir(exist_ok=True)
+
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_title = re.sub(r'[\\/*?:"<>|]', "", title)[:60]
+
+    file_path = backup_dir / f"{timestamp}_{safe_title}.html"
+
+    html_content = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>{html.escape(title)}</title>
+<meta name="description" content="{html.escape(description or '')}">
+</head>
+<body>
+<h1>{html.escape(title)}</h1>
+<p><strong>Category:</strong> {html.escape(category)}</p>
+<hr>
+{content}
+</body>
+</html>
+"""
+
+    file_path.write_text(html_content, encoding="utf-8")
+    print(f"✅ Local backup saved: {file_path}")
+    return file_path
 
 
 def generate_ai_image_url(topic_prompt, category):
@@ -730,6 +789,8 @@ if __name__ == "__main__":
         recent_titles = get_recent_posts(blogger_service)
 
         title, content, description, category = generate_post(recent_titles)
+
+        save_local_backup(title, content, description, category)
 
         post_to_blogger(
             service=blogger_service,
