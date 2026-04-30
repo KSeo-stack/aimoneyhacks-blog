@@ -4,9 +4,15 @@ import datetime
 import os
 import random
 import re
+import warnings
 from ddgs import DDGS
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+
+# ==========================================
+# 0. 쓸데없는 경고 메시지(Warning) 완벽 차단
+# ==========================================
+warnings.filterwarnings("ignore")
 
 # ==========================================
 # 1. 환경 변수 세팅
@@ -107,23 +113,31 @@ def generate_post(recent_titles):
     CRITICAL RULE: Avoid these recent topics: [{recent_titles_str}]. 
     Pick a completely NEW and DIFFERENT specific topic.
 
-    Return EXACTLY in this XML format:
+    Return EXACTLY in this XML format with NO extra conversational text:
     <TOPIC>specific topic</TOPIC>
     <QUERY1>search query 1</QUERY1>
     <QUERY2>search query 2</QUERY2>
     """
     
     msg1 = client.messages.create(
-        model="claude-3-5-sonnet-20241022",
+        model="claude-sonnet-4-20250514",  # 잘 작동하던 모델명으로 롤백
         max_tokens=300,
         messages=[{"role": "user", "content": step1_prompt}]
     )
     
     response1 = msg1.content[0].text
-    topic = re.search(r"<TOPIC>(.*?)</TOPIC>", response1, re.DOTALL).group(1).strip()
-    query1 = re.search(r"<QUERY1>(.*?)</QUERY1>", response1, re.DOTALL).group(1).strip()
-    query2 = re.search(r"<QUERY2>(.*?)</QUERY2>", response1, re.DOTALL).group(1).strip()
     
+    # 잠재적 파싱 에러 완벽 방어 (정규식 실패 시 기본값 세팅)
+    try:
+        topic = re.search(r"<TOPIC>(.*?)</TOPIC>", response1, re.DOTALL).group(1).strip()
+        query1 = re.search(r"<QUERY1>(.*?)</QUERY1>", response1, re.DOTALL).group(1).strip()
+        query2 = re.search(r"<QUERY2>(.*?)</QUERY2>", response1, re.DOTALL).group(1).strip()
+    except Exception as e:
+        print(f"⚠️ Step 1 Parsing Error: {e}. Using fallback topic.")
+        topic = f"Latest Trends in {category} for 2026"
+        query1 = f"{category} trends 2026"
+        query2 = f"Best {category} tips"
+        
     print(f"Generated Topic: {topic}")
     
     # [Step 2] 실시간 팩트 수집
@@ -145,7 +159,7 @@ def generate_post(recent_titles):
     3. Format: {fmt}. Length: 900-1000 words.
     4. HTML: h2, h3, p, ul, li tags. Emojis in headings.
 
-    Return EXACTLY in this XML format:
+    Return EXACTLY in this XML format with NO extra conversational text:
     <TITLE>catchy title</TITLE>
     <KEYWORD>pexels search keyword</KEYWORD>
     <DESCRIPTION>meta description</DESCRIPTION>
@@ -153,17 +167,25 @@ def generate_post(recent_titles):
     """
 
     msg2 = client.messages.create(
-        model="claude-3-5-sonnet-20241022",
+        model="claude-sonnet-4-20250514",  # 잘 작동하던 모델명으로 롤백
         max_tokens=2500,
         messages=[{"role": "user", "content": step3_prompt}]
     )
     
     response2 = msg2.content[0].text
     
-    title = re.search(r"<TITLE>(.*?)</TITLE>", response2, re.DOTALL).group(1).strip()
-    keyword = re.search(r"<KEYWORD>(.*?)</KEYWORD>", response2, re.DOTALL).group(1).strip()
-    description = re.search(r"<DESCRIPTION>(.*?)</DESCRIPTION>", response2, re.DOTALL).group(1).strip()
-    content = re.search(r"<CONTENT>(.*?)</CONTENT>", response2, re.DOTALL).group(1).strip()
+    # 잠재적 파싱 에러 완벽 방어
+    try:
+        title = re.search(r"<TITLE>(.*?)</TITLE>", response2, re.DOTALL).group(1).strip()
+        keyword = re.search(r"<KEYWORD>(.*?)</KEYWORD>", response2, re.DOTALL).group(1).strip()
+        description = re.search(r"<DESCRIPTION>(.*?)</DESCRIPTION>", response2, re.DOTALL).group(1).strip()
+        content = re.search(r"<CONTENT>(.*?)</CONTENT>", response2, re.DOTALL).group(1).strip()
+    except Exception as e:
+        print(f"⚠️ Step 3 Parsing Error: {e}. Rescuing content...")
+        title = f"Complete Guide to {topic}"
+        keyword = "business"
+        description = f"Learn everything you need to know about {topic}."
+        content = f"<h2>Introduction to {topic}</h2><p>{response2}</p>"
 
     # Pexels 이미지 추가
     img_url, photographer, photo_link = get_pexels_image(keyword)
