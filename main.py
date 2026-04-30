@@ -93,6 +93,26 @@ GUESS_PRICING_PATTERNS = [
     r"\$[\d,]+(?:\.\d+)?\s*(?:-|–|—|to)\s*\$?[\d,]+(?:\.\d+)?",
 ]
 
+FINANCE_DISCLAIMER_PATTERNS = [
+    r"\bpersonal finance\b",
+    r"\bemergency fund\b",
+    r"\bsavings account(s)?\b",
+    r"\bhigh-yield savings\b",
+    r"\binvest(?:ing|ment|ments|or|ors|ed|s)?\b",
+    r"\bdividend(s)?\b",
+    r"\broth\b",
+    r"\bira\b",
+    r"\b401k\b",
+    r"\b401\(k\)\b",
+    r"\betf(s)?\b",
+    r"\bstock(s)?\b",
+    r"\bportfolio(s)?\b",
+    r"\bretirement\b",
+    r"\btax(?:es|able|ation)?\b",
+    r"\bbrokerage\b",
+    r"\bpassive income\b",
+]
+
 
 # ==========================================
 # 1. 공용 유틸
@@ -611,24 +631,11 @@ def needs_finance_disclaimer(category: str, title: str, content: str) -> bool:
 
     haystack = f"{title} {re.sub(r'<[^>]+>', ' ', content)}".lower()
 
-    keywords = [
-        "invest",
-        "dividend",
-        "roth",
-        "ira",
-        "etf",
-        "stock",
-        "portfolio",
-        "retirement",
-        "tax",
-        "brokerage",
-        "passive income",
-        "emergency fund",
-        "savings account",
-        "personal finance",
-    ]
+    for pattern in FINANCE_DISCLAIMER_PATTERNS:
+        if re.search(pattern, haystack, flags=re.IGNORECASE):
+            return True
 
-    return any(k in haystack for k in keywords)
+    return False
 
 
 def build_finance_disclaimer_html() -> str:
