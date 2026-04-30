@@ -18,7 +18,7 @@ BLOGGER_REFRESH_TOKEN = os.environ.get("BLOGGER_REFRESH_TOKEN")
 BLOG_ID = os.environ.get("BLOG_ID")
 
 # ==========================================
-# 2. 고수익 대분류 카테고리 및 포맷 설정
+# 2. 카테고리 및 포맷
 # ==========================================
 CATEGORIES = [
     "Personal Finance & Investing",
@@ -38,10 +38,35 @@ FORMATS = [
 ]
 
 # ==========================================
-# 3. 기능 함수
+# 3. 구글 블로거 연결 및 기능 함수
 # ==========================================
+def get_blogger_service():
+    """Blogger API 서비스 객체를 생성합니다."""
+    creds = Credentials(
+        token=None,
+        refresh_token=BLOGGER_REFRESH_TOKEN,
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=BLOGGER_CLIENT_ID,
+        client_secret=BLOGGER_CLIENT_SECRET
+    )
+    return build('blogger', 'v3', credentials=creds)
+
+def get_recent_posts(service):
+    """최근 작성된 블로그 글 제목 15개를 가져와서 중복을 방지합니다."""
+    try:
+        print("Fetching recent posts to avoid duplication...")
+        request = service.posts().list(blogId=BLOG_ID, maxResults=15, status='LIVE')
+        response = request.execute()
+        items = response.get('items', [])
+        recent_titles = [item['title'] for item in items]
+        print(f"Found {len(recent_titles)} recent posts.")
+        return recent_titles
+    except Exception as e:
+        print(f"Failed to fetch recent posts: {e}")
+        return []
+
 def get_pexels_image(keyword):
-    """Pexels에서 주제에 맞는 이미지를 가져옵니다."""
+    """Pexels 이미지 검색"""
     try:
         response = requests.get(
             "https://api.pexels.com/v1/search",
@@ -57,7 +82,7 @@ def get_pexels_image(keyword):
     return None, None, None
 
 def get_real_time_context(queries):
-    """최신 웹 검색을 통해 팩트체크용 데이터를 수집합니다."""
+    """최신 웹 검색 팩트체크"""
     context_data = ""
     ddgs = DDGS()
     for query in queries:
@@ -70,7 +95,7 @@ def get_real_time_context(queries):
             print(f"Search failed for {query}: {e}")
     return context_data
 
-def generate_post():
+def generate_post(recent_titles):
     client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
     today = datetime.datetime.now().strftime("%B %d, %Y")
     
@@ -78,10 +103,17 @@ def generate_post():
     fmt = random.choice(FORMATS)
     print(f"Selected Category: {category}")
 
-    # Step 1: 고단가 세부 주제 기획 및 팩트체크용 검색어 도출
+    # 최근 글 제목 리스트를 문자열로 변환
+    recent_titles_str = ", ".join(recent_titles) if recent_titles else "None"
+
+    # [Step 1] 주제 선정 (중복 회피 로직 추가)
     step1_prompt = f"""
     You are an expert SEO strategist. Choose a HIGH-CPC, trending sub-niche topic in the category of "{category}".
-    Then, provide 2 highly effective Google search queries to find the most recent, popular blog posts and factual data about this topic.
+    
+    CRITICAL RULE: I have recently published posts about the following topics: [{recent_titles_str}]. 
+    You MUST pick a completely NEW and DIFFERENT specific topic that does not overlap with those recent posts.
+
+    Then, provide 2 highly effective Google search queries to find the most recent, popular blog posts and factual data about this new topic.
     
     Return EXACTLY in this format, with no other text:
     TOPIC: [your specific topic]
@@ -90,7 +122,7 @@ def generate_post():
     """
     
     msg1 = client.messages.create(
-        model="claude-3-5-sonnet-20240620",
+        model="claude-sonnet-4-20250514",
         max_tokens=300,
         messages=[{"role": "user", "content": step1_prompt}]
     )
@@ -101,12 +133,11 @@ def generate_post():
     query2 = response1.split("QUERY2:")[1].strip()
     
     print(f"Generated Topic: {topic}")
-    print(f"Searching web for facts... Queries: '{query1}', '{query2}'")
-
-    # Step 2: 실시간 데이터 수집
+    
+    # [Step 2] 실시간 데이터 수집
     real_time_context = get_real_time_context([query1, query2])
     
-    # Step 3: 수집된 팩트를 기반으로 거짓 없이 글 작성
+    # [Step 3] 블로그 작성 (자연스러운 문장 및 팩트 엄수 로직 추가)
     step3_prompt = f"""
     You are an expert SEO blog writer. Today is {today}.
     Write a highly-searched, high-CPC blog post about: "{topic}"
@@ -117,9 +148,13 @@ def generate_post():
     </reference_data>
     
     CRITICAL FACTUALITY REQUIREMENTS:
-    1. Base your post heavily on the <reference_data> provided. Mention the real trends, software names, and features found in the search snippets.
+    1. Base your post heavily on the <reference_data> provided. Mention the real trends and features found in the search snippets.
     2. DO NOT invent fake numbers, prices, or statistics.
-    3. Synthesize the popular blog snippets to make your post more comprehensive than the competitors. 
+
+    CRITICAL WRITING STYLE (NATIVE ENGLISH):
+    1. Write in a highly natural, conversational, and engaging Native English tone.
+    2. AVOID robotic, cliché AI phrases completely (e.g., Do NOT use "Delve into", "Tapestry", "Testament", "In conclusion", "It's important to note", "In the ever-evolving landscape").
+    3. Use active voice and short, punchy sentences. Write like a top-tier human copywriter.
     
     Requirements:
     - Format: {fmt}
@@ -135,7 +170,7 @@ def generate_post():
     """
 
     msg2 = client.messages.create(
-        model="claude-3-5-sonnet-20240620",
+        model="claude-sonnet-4-20250514",
         max_tokens=2500,
         messages=[{"role": "user", "content": step3_prompt}]
     )
@@ -159,43 +194,38 @@ def generate_post():
 
     return title, content, description, category
 
-def post_to_blogger(title, content, description, category):
-    """Google Blogger API 발행 로직 (BLOG_ID 직접 활용)"""
+def post_to_blogger(service, title, content, category):
+    """Blogger에 글을 발행합니다."""
     try:
-        creds = Credentials(
-            token=None,
-            refresh_token=BLOGGER_REFRESH_TOKEN,
-            token_uri="https://oauth2.googleapis.com/token",
-            client_id=BLOGGER_CLIENT_ID,
-            client_secret=BLOGGER_CLIENT_SECRET
-        )
-        
-        service = build('blogger', 'v3', credentials=creds)
-        
         body = {
             "kind": "blogger#post",
             "title": title,
             "content": content,
             "labels": [category.split(" ")[0], "2026 Trends", "Guide"]
         }
-        
         print("Publishing post to Blogger...")
-        posts = service.posts()
-        request = posts.insert(blogId=BLOG_ID, body=body, isDraft=False)
+        request = service.posts().insert(blogId=BLOG_ID, body=body, isDraft=False)
         response = request.execute()
         
         print(f"✅ Successfully posted to Blogger!")
         print(f"🔗 URL: {response.get('url')}")
-        return response
-        
     except Exception as e:
         print(f"❌ Error posting to Blogger: {e}")
-        return {}
 
 if __name__ == "__main__":
     try:
         print("🚀 Starting Automated Blog Post Generation...")
-        title, content, description, category = generate_post()
-        post_to_blogger(title, content, description, category)
+        # 1. Blogger 서비스 연결
+        blogger_service = get_blogger_service()
+        
+        # 2. 최근 글 제목 가져오기 (중복 방지용)
+        recent_titles = get_recent_posts(blogger_service)
+        
+        # 3. 글 작성
+        title, content, description, category = generate_post(recent_titles)
+        
+        # 4. Blogger에 발행
+        post_to_blogger(blogger_service, title, content, category)
+        
     except Exception as e:
         print(f"❌ Automation failed: {e}")
