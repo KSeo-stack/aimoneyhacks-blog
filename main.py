@@ -93,6 +93,27 @@ GUESS_PRICING_PATTERNS = [
     r"\$[\d,]+(?:\.\d+)?\s*(?:-|–|—|to)\s*\$?[\d,]+(?:\.\d+)?",
 ]
 
+UNSUPPORTED_REVIEW_AND_RANKING_PATTERNS = [
+    r"\bgartner\b",
+    r"\bpeer insights\b",
+    r"\bverified reviewers?\b",
+    r"\buser ratings?\b",
+    r"\bcustomer ratings?\b",
+    r"\breview ratings?\b",
+    r"\brated\s+\d(?:\.\d)?\s*(?:/ ?5|out of 5|stars?)\b",
+    r"\b\d(?:\.\d)?\s*(?:/ ?5|out of 5|stars?)\b",
+    r"\bworld'?s\s+#?1\b",
+    r"\b#1\b",
+    r"\bnumber one\b",
+    r"\bmarket leader(?:ship)?\b",
+    r"\bindustry-leading\b",
+    r"\bmarket-leading\b",
+    r"\bbest-in-class\b",
+    r"\bdominant platform\b",
+    r"\bleads on\b",
+    r"\bleads in\b",
+]
+
 
 # ==========================================
 # 1. 공용 유틸
@@ -300,6 +321,14 @@ def build_extra_search_queries(topic: str, category: str, query1: str, query2: s
         queries.extend([
             f"{topic} CRM automation guide",
             f"{topic} sales workflow automation",
+            f"{topic} official product comparison",
+        ])
+
+    if any(k in text for k in ["hubspot", "salesforce"]):
+        queries.extend([
+            "HubSpot Salesforce comparison official",
+            "HubSpot CRM official",
+            "Salesforce CRM official",
         ])
 
     if any(k in text for k in ["dividend", "emergency fund", "savings", "roth", "ira", "tax"]):
@@ -359,7 +388,7 @@ def get_real_time_context(queries: List[str], max_results: int = 4) -> str:
     if not context_blocks:
         return (
             "No fresh reference data retrieved. Use broadly accepted, non-speculative information. "
-            "Avoid exact pricing, exact tax numbers, exact performance claims, and unsupported rankings."
+            "Avoid exact pricing, exact tax numbers, exact performance claims, exact review ratings, market leadership claims, and unsupported rankings."
         )
 
     return "\n---\n".join(context_blocks[:14])
@@ -371,6 +400,8 @@ def get_real_time_context(queries: List[str], max_results: int = 4) -> str:
 def topic_to_image_query(topic: str, category: str) -> str:
     topic_lower = topic.lower()
 
+    if "hubspot" in topic_lower or "salesforce" in topic_lower:
+        return "crm software dashboard"
     if "dividend" in topic_lower:
         return "dividend investing finance"
     if "emergency fund" in topic_lower:
@@ -759,6 +790,8 @@ def build_labels(category: str, title: str, content: str) -> List[str]:
 
     keyword_map = {
         "crm": "CRM",
+        "hubspot": "CRM",
+        "salesforce": "CRM",
         "sales pipeline": "Sales Automation",
         "zero trust": "Zero Trust",
         "ztna": "Zero Trust",
@@ -800,6 +833,8 @@ def validate_content_quality(title: str, content: str, category: str) -> List[st
         issues.append("Title too short")
 
     lowered = strip_html(content).lower()
+    lowered_title = title.lower()
+    combined = f"{lowered_title} {lowered}"
 
     for phrase in BANNED_AI_PHRASES:
         if phrase in lowered:
@@ -808,6 +843,10 @@ def validate_content_quality(title: str, content: str, category: str) -> List[st
     for pattern in GUESS_PRICING_PATTERNS:
         if re.search(pattern, lowered, flags=re.IGNORECASE):
             issues.append(f"Guess-pricing or vague numeric pricing pattern found: {pattern}")
+
+    for pattern in UNSUPPORTED_REVIEW_AND_RANKING_PATTERNS:
+        if re.search(pattern, combined, flags=re.IGNORECASE):
+            issues.append(f"Unsupported review/ranking/market-leader claim found: {pattern}")
 
     if "<script" in content.lower():
         issues.append("Unsafe HTML detected")
@@ -842,8 +881,9 @@ Rules:
 3. The topic must be practical and genuinely useful.
 4. Avoid clickbait.
 5. Avoid exact pricing topics unless pricing can be handled carefully with "pricing varies" language.
-6. Avoid repeating topics already covered in recent titles.
-7. Return XML only with:
+6. Avoid review-rating topics, Gartner-rating topics, and market-share ranking topics.
+7. Avoid repeating topics already covered in recent titles.
+8. Return XML only with:
 <TOPIC>...</TOPIC>
 <QUERY1>...</QUERY1>
 <QUERY2>...</QUERY2>
@@ -894,6 +934,15 @@ Writing style rules:
 - Do NOT repeat the title inside CONTENT. Blogger already displays the title.
 - Do NOT include any disclaimer inside CONTENT. The system adds disclaimers separately only when needed.
 
+Strict comparison rules:
+- Do NOT mention Gartner, Peer Insights, review ratings, user ratings, star ratings, verified reviewers, or customer ratings.
+- Do NOT write "world's #1", "#1", "number one", "market leader", "industry-leading", "market-leading", or "best-in-class".
+- Do NOT say one tool "leads" another based on reviews or rankings.
+- Compare tools using practical fit language only:
+  "better fit when", "often chosen for", "known for", "stronger fit for", "may work better if".
+- If comparing HubSpot vs Salesforce, focus on ease of use, implementation complexity, customization, admin overhead, reporting depth, integration ecosystem, and total workflow fit.
+- Do NOT include numeric review scores.
+
 Structure rules:
 1. <TITLE> should be SEO-friendly and natural. No excessive hype.
 2. Start CONTENT with a visible Quick Summary box:
@@ -939,6 +988,10 @@ Rules:
 - Keep the same overall topic.
 - Improve clarity and keep the article useful.
 - Remove vague or approximate pricing.
+- Remove all Gartner, Peer Insights, star-rating, user-rating, and verified-reviewer claims.
+- Remove all "#1", "world's #1", "market leader", "industry-leading", "market-leading", and "best-in-class" claims.
+- Replace ranking language with practical fit language:
+  "known for", "often chosen for", "better fit when", "stronger fit for", "may work better if".
 - If pricing is uncertain, use generic wording like "Pricing varies by plan, billing term, and vendor."
 - Preserve the blog structure.
 - Do NOT repeat the title inside CONTENT.
@@ -1004,8 +1057,6 @@ def generate_post(recent_titles: List[str]) -> Tuple[str, str, str, str, bool, L
     search_queries = build_extra_search_queries(topic, category, query1, query2)
     reference_data = get_real_time_context(search_queries)
 
-    raw = ""
-
     try:
         content_resp = call_claude(
             client,
@@ -1039,8 +1090,11 @@ No commentary. No markdown.
     issues = validate_content_quality(title, content, category)
     validation_passed = len(issues) == 0
 
-    if issues:
-        log("⚠️ Quality issues found. Trying one revision...")
+    for revision_attempt in range(2):
+        if not issues:
+            break
+
+        log(f"⚠️ Quality issues found. Revision attempt {revision_attempt + 1}/2...")
 
         for issue in issues:
             log(f"- {issue}")
@@ -1057,6 +1111,7 @@ No commentary. No markdown.
             title, meta_description, content = parse_article_xml(revised, fallback_title=title)
         except Exception as e:
             log(f"⚠️ Revision XML parse failed: {e}. Keeping previous draft.")
+            break
 
         content = remove_duplicate_title_from_content(content, title)
         content = remove_wrong_finance_disclaimer(content, category)
@@ -1064,11 +1119,11 @@ No commentary. No markdown.
         issues = validate_content_quality(title, content, category)
         validation_passed = len(issues) == 0
 
-        if issues:
-            log("❌ Quality issues remain after revision:")
+    if issues:
+        log("❌ Quality issues remain after revision:")
 
-            for issue in issues:
-                log(f"- {issue}")
+        for issue in issues:
+            log(f"- {issue}")
 
     content = post_process_html(content, title, category)
 
@@ -1079,7 +1134,6 @@ No commentary. No markdown.
 
     final_content = header_img + content + disclaimer_html + cta_html
 
-    # 마지막 안전장치: 비금융 카테고리에서 금융 disclaimer가 끼어 있으면 강제 제거
     final_content = remove_wrong_finance_disclaimer(final_content, category)
 
     log(f"Generated title: {title}")
