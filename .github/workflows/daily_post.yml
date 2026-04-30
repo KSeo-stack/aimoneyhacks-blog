@@ -29,7 +29,13 @@ jobs:
           BLOGGER_CLIENT_SECRET: ${{ secrets.BLOGGER_CLIENT_SECRET }}
           BLOGGER_REFRESH_TOKEN: ${{ secrets.BLOGGER_REFRESH_TOKEN }}
           BLOG_ID: ${{ secrets.BLOG_ID }}
-
-          # 첫 실행용: Blogger에 초안으로만 저장됨
           DRAFT_MODE: "true"
         run: python main.py
+
+      - name: 📦 Upload draft backup
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: draft-backups
+          path: draft_backups/*.html
+          if-no-files-found: ignore
