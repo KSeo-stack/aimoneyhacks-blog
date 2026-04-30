@@ -120,14 +120,14 @@ def generate_post(recent_titles):
     """
     
     msg1 = client.messages.create(
-        model="claude-sonnet-4-20250514",  # 잘 작동하던 모델명으로 롤백
+        model="claude-sonnet-4-20250514",  
         max_tokens=300,
         messages=[{"role": "user", "content": step1_prompt}]
     )
     
     response1 = msg1.content[0].text
     
-    # 잠재적 파싱 에러 완벽 방어 (정규식 실패 시 기본값 세팅)
+    # 잠재적 파싱 에러 방어
     try:
         topic = re.search(r"<TOPIC>(.*?)</TOPIC>", response1, re.DOTALL).group(1).strip()
         query1 = re.search(r"<QUERY1>(.*?)</QUERY1>", response1, re.DOTALL).group(1).strip()
@@ -167,14 +167,14 @@ def generate_post(recent_titles):
     """
 
     msg2 = client.messages.create(
-        model="claude-sonnet-4-20250514",  # 잘 작동하던 모델명으로 롤백
+        model="claude-sonnet-4-20250514",  
         max_tokens=2500,
         messages=[{"role": "user", "content": step3_prompt}]
     )
     
     response2 = msg2.content[0].text
     
-    # 잠재적 파싱 에러 완벽 방어
+    # 잠재적 파싱 에러 방어
     try:
         title = re.search(r"<TITLE>(.*?)</TITLE>", response2, re.DOTALL).group(1).strip()
         keyword = re.search(r"<KEYWORD>(.*?)</KEYWORD>", response2, re.DOTALL).group(1).strip()
@@ -193,8 +193,16 @@ def generate_post(recent_titles):
         image_html = f'<div style="margin-bottom:24px;"><img src="{img_url}" alt="{title}" style="width:100%;border-radius:8px;"/><p style="font-size:12px;color:#888;">Photo by <a href="{photo_link}" target="_blank">{photographer}</a> on <a href="https://www.pexels.com" target="_blank">Pexels</a></p></div>'
         content = image_html + content
 
-    # CTA 추가
-    cta = '<div style="background:#f0f7ff;border-left:4px solid #0066cc;padding:20px;margin-top:32px;border-radius:8px;"><h3>Want 100 AI Prompts to Make Money Online?</h3><p>Get our complete prompt pack with 100 copy-paste prompts to earn online with AI.</p><a href="https://cashgpt00.gumroad.com/l/izbis" style="background:#0066cc;color:white;padding:10px 20px;border-radius:6px;text-decoration:none;font-weight:bold;">Get the Prompt Pack</a></div>'
+    # ==========================================
+    # 👇 다크모드 대응: CTA 텍스트 색상을 어두운 색(#111827, #374151)으로 강제 적용했습니다.
+    # ==========================================
+    cta = '''
+    <div style="background:#f0f7ff; border-left:4px solid #0066cc; padding:20px; margin-top:32px; border-radius:8px;">
+        <h3 style="color:#111827; margin-top:0; font-weight:bold;">Want 100 AI Prompts to Make Money Online?</h3>
+        <p style="color:#374151; margin-bottom:16px;">Get our complete prompt pack with 100 copy-paste prompts to earn online with AI.</p>
+        <a href="https://cashgpt00.gumroad.com/l/izbis" style="background:#0066cc; color:white; padding:10px 20px; border-radius:6px; text-decoration:none; font-weight:bold; display:inline-block;">Get the Prompt Pack</a>
+    </div>
+    '''
     content = content + cta
 
     return title, content, description, category
