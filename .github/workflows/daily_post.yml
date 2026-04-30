@@ -1,6 +1,8 @@
-name: 🚀 Daily AI Blog Automation - Draft Test
+name: 🚀 Daily AI Blog Automation
 
 on:
+  schedule:
+    - cron: '30 23 * * *'
   workflow_dispatch:
 
 jobs:
@@ -21,7 +23,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install anthropic requests google-api-python-client google-auth-oauthlib google-auth-httplib2 ddgs
 
-      - name: 🤖 Run Automation Script in Draft Mode
+      - name: 🤖 Run Automation Script
         env:
           CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
           CLAUDE_MODEL: ${{ secrets.CLAUDE_MODEL }}
@@ -30,7 +32,7 @@ jobs:
           BLOGGER_CLIENT_SECRET: ${{ secrets.BLOGGER_CLIENT_SECRET }}
           BLOGGER_REFRESH_TOKEN: ${{ secrets.BLOGGER_REFRESH_TOKEN }}
           BLOG_ID: ${{ secrets.BLOG_ID }}
-          DRAFT_MODE: "true"
+          DRAFT_MODE: "false"
           HIGH_RISK_DRAFT_MODE: "true"
         run: python main.py
 
