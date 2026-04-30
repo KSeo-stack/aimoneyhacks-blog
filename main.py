@@ -19,8 +19,11 @@ BLOGGER_CLIENT_SECRET = os.environ.get("BLOGGER_CLIENT_SECRET")
 BLOGGER_REFRESH_TOKEN = os.environ.get("BLOGGER_REFRESH_TOKEN")
 BLOG_ID = os.environ.get("BLOG_ID")
 
-CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL") or "claude-3-5-sonnet-20240620"
-DRAFT_MODE = os.environ.get("DRAFT_MODE", "false").lower() == "true"
+# GitHub Secret에 CLAUDE_MODEL이 없으면 기본 모델 사용
+CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL") or "claude-sonnet-4-6"
+
+# YAML에서 true/false로 제어
+DRAFT_MODE = os.environ.get("DRAFT_MODE", "true").lower() == "true"
 
 CTA_INSERT_RATE = 0.60
 
@@ -652,6 +655,8 @@ Rules:
 if __name__ == "__main__":
     try:
         print("🚀 Starting Automated Blog Pipeline...")
+        print(f"Using Claude model: {CLAUDE_MODEL}")
+        print(f"Draft mode: {DRAFT_MODE}")
 
         validate_env()
 
