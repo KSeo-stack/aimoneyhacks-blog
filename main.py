@@ -322,6 +322,8 @@ def topic_to_image_query(topic: str, category: str) -> str:
         return "ecommerce online store marketing"
     if "remote work" in topic_lower or "productivity" in topic_lower:
         return "remote work productivity desk"
+    if "sales pipeline" in topic_lower:
+        return "sales team business meeting"
 
     if category == "Personal Finance & Investing":
         return "personal finance investing"
@@ -400,6 +402,47 @@ def build_header_image_html(title: str, topic: str, category: str) -> str:
 # ==========================================
 # 5. HTML 후처리
 # ==========================================
+def remove_duplicate_title_from_content(content: str, title: str) -> str:
+    if not content or not title:
+        return content
+
+    escaped_title = re.escape(title.strip())
+
+    patterns = [
+        rf"^\s*<h1[^>]*>\s*{escaped_title}\s*</h1>\s*",
+        rf"^\s*<h2[^>]*>\s*{escaped_title}\s*</h2>\s*",
+        rf"^\s*<p[^>]*>\s*{escaped_title}\s*</p>\s*",
+        rf"^\s*<strong[^>]*>\s*{escaped_title}\s*</strong>\s*",
+        rf"^\s*{escaped_title}\s*(<br\s*/?>)?\s*",
+    ]
+
+    for pattern in patterns:
+        content = re.sub(pattern, "", content, count=1, flags=re.IGNORECASE | re.DOTALL)
+
+    return content.strip()
+
+
+def remove_wrong_finance_disclaimer(content: str, category: str) -> str:
+    if category == "Personal Finance & Investing":
+        return content
+
+    disclaimer_div_pattern = re.compile(
+        r"<div\b[^>]*>.*?(not financial, tax, or legal advice|educational purposes only).*?</div>",
+        re.IGNORECASE | re.DOTALL
+    )
+
+    content = disclaimer_div_pattern.sub("", content)
+
+    plain_disclaimer_pattern = re.compile(
+        r"Note:\s*This article is for educational purposes only and is not financial, tax, or legal advice\..*?(decisions\.|situation\.)",
+        re.IGNORECASE | re.DOTALL
+    )
+
+    content = plain_disclaimer_pattern.sub("", content)
+
+    return content.strip()
+
+
 def merge_inline_style(tag_html: str, extra_style: str) -> str:
     if 'style="' in tag_html:
         return re.sub(
@@ -577,7 +620,9 @@ def style_tables(content: str) -> str:
     return table_pattern.sub(table_repl, content)
 
 
-def post_process_html(content: str) -> str:
+def post_process_html(content: str, title: str, category: str) -> str:
+    content = remove_duplicate_title_from_content(content, title)
+    content = remove_wrong_finance_disclaimer(content, category)
     content = restyle_special_boxes(content)
     content = style_tables(content)
     return content
@@ -659,6 +704,7 @@ def build_labels(category: str, title: str, content: str) -> List[str]:
 
     keyword_map = {
         "crm": "CRM",
+        "sales pipeline": "Sales Automation",
         "dividend": "Dividend Investing",
         "emergency fund": "Emergency Fund",
         "savings": "Savings",
@@ -780,6 +826,7 @@ Writing style rules:
 - No made-up prices.
 - No unsupported exact numbers.
 - No markdown. Return clean HTML inside CONTENT.
+- Do NOT repeat the title inside CONTENT. Blogger already displays the title.
 
 Structure rules:
 1. <TITLE> should be SEO-friendly and natural. No excessive hype.
@@ -828,6 +875,7 @@ Rules:
 - Remove vague or approximate pricing.
 - If pricing is uncertain, use generic wording like "Pricing varies by plan, billing term, and vendor."
 - Preserve the blog structure.
+- Do NOT repeat the title inside CONTENT.
 - Keep HTML clean.
 
 Return XML only:
@@ -881,6 +929,9 @@ def generate_post(recent_titles: List[str]) -> Tuple[str, str, str, str, bool, L
     meta_description = extract_tag(raw, "META_DESCRIPTION")
     content = extract_tag(raw, "CONTENT")
 
+    content = remove_duplicate_title_from_content(content, title)
+    content = remove_wrong_finance_disclaimer(content, category)
+
     issues = validate_content_quality(title, content)
     validation_passed = len(issues) == 0
 
@@ -902,6 +953,9 @@ def generate_post(recent_titles: List[str]) -> Tuple[str, str, str, str, bool, L
         meta_description = extract_tag(revised, "META_DESCRIPTION")
         content = extract_tag(revised, "CONTENT")
 
+        content = remove_duplicate_title_from_content(content, title)
+        content = remove_wrong_finance_disclaimer(content, category)
+
         issues = validate_content_quality(title, content)
         validation_passed = len(issues) == 0
 
@@ -911,7 +965,7 @@ def generate_post(recent_titles: List[str]) -> Tuple[str, str, str, str, bool, L
             for issue in issues:
                 log(f"- {issue}")
 
-    content = post_process_html(content)
+    content = post_process_html(content, title, category)
 
     header_img = build_header_image_html(title, topic, category)
 
