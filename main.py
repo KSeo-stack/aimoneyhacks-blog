@@ -30,6 +30,7 @@ HIGH_RISK_DRAFT_MODE = os.environ.get("HIGH_RISK_DRAFT_MODE", "true").lower() ==
 
 CTA_INSERT_RATE = 0.60
 MAX_SEARCH_QUERIES = 10
+MAX_REVISION_ATTEMPTS = 2
 
 CATEGORIES = [
     "Personal Finance & Investing",
@@ -171,7 +172,13 @@ HIGH_RISK_KEYWORDS = [
     "breach",
     "privacy",
     "password manager",
-    "zero trust"
+    "zero trust",
+    "google ads",
+    "shopping ads",
+    "ppc",
+    "cpc",
+    "roas",
+    "ad budget"
 ]
 
 PRICING_INTENT_KEYWORDS = [
@@ -185,7 +192,26 @@ PRICING_INTENT_KEYWORDS = [
     "platform",
     "solution",
     "password manager",
-    "saas"
+    "saas",
+    "budget",
+    "cpc",
+    "ppc",
+    "google ads",
+    "shopping ads"
+]
+
+PAID_ADS_KEYWORDS = [
+    "google ads",
+    "shopping ads",
+    "performance max",
+    "merchant center",
+    "ppc",
+    "cpc",
+    "roas",
+    "ad budget",
+    "campaign budget",
+    "paid search",
+    "paid ads"
 ]
 
 PRICING_GUESS_PATTERNS = [
@@ -215,6 +241,8 @@ OFFICIAL_SOURCE_DOMAINS = {
     "vanguard.com",
     "microsoft.com",
     "google.com",
+    "support.google.com",
+    "ads.google.com",
     "cloudflare.com",
     "okta.com",
     "atlassian.com",
@@ -381,6 +409,11 @@ def get_disclaimer_for_category(category):
 def has_pricing_intent(text):
     lowered = text.lower()
     return any(keyword in lowered for keyword in PRICING_INTENT_KEYWORDS)
+
+
+def is_paid_ads_topic(text):
+    lowered = text.lower()
+    return any(keyword in lowered for keyword in PAID_ADS_KEYWORDS)
 
 
 def is_high_risk_post(title, category):
@@ -574,7 +607,10 @@ def extract_numeric_claim_sentences(content):
         r"\bHIPAA\b",
         r"\bSSO\b",
         r"\bfree tier\b",
-        r"\bzero-knowledge\b"
+        r"\bzero-knowledge\b",
+        r"\bCPC\b",
+        r"\bCPA\b",
+        r"\bROAS\b"
     ]
 
     claim_sentences = []
@@ -595,7 +631,7 @@ def extract_pricing_claim_sentences(content):
     pricing_sentences = []
 
     for sentence in sentences:
-        if "$" in sentence or re.search(r"\bpricing\b|\bprice\b|\bcost\b|\bper user\b|\bper month\b|\bper year\b", sentence, re.IGNORECASE):
+        if "$" in sentence or re.search(r"\bpricing\b|\bprice\b|\bcost\b|\bper user\b|\bper month\b|\bper year\b|\bbudget\b|\bCPC\b|\bCPA\b|\bROAS\b", sentence, re.IGNORECASE):
             pricing_sentences.append(sentence)
 
     return pricing_sentences[:30]
@@ -628,7 +664,12 @@ def validate_pricing_patterns(content):
         "plan",
         "tier",
         "renewal",
-        "first-year"
+        "first-year",
+        "per click",
+        "cost per click",
+        "cpc",
+        "daily budget",
+        "monthly budget"
     ]
 
     for sentence in pricing_claims:
@@ -719,6 +760,24 @@ def validate_content_quality(title, content, context):
     issues.extend(validate_title(title))
 
     return issues
+
+
+def has_money_related_issue(issues):
+    money_keywords = [
+        "dollar",
+        "price",
+        "pricing",
+        "budget",
+        "billing",
+        "cpc",
+        "cpa",
+        "roas",
+        "$",
+        "cost"
+    ]
+
+    combined = " ".join(issues).lower()
+    return any(keyword in combined for keyword in money_keywords)
 
 
 def get_blogger_service():
@@ -947,6 +1006,15 @@ def build_search_queries(topic, query1, query2, category):
             f"{topic} official guidance"
         ])
 
+    if is_paid_ads_topic(combined):
+        queries.extend([
+            "site:support.google.com/google-ads shopping campaigns setup",
+            "site:support.google.com/google-ads campaign budgets",
+            "site:support.google.com/google-ads bidding strategy shopping campaigns",
+            "site:ads.google.com google shopping ads",
+            f"{topic} Google Ads official help"
+        ])
+
     return dedupe_preserve_order(queries)[:MAX_SEARCH_QUERIES]
 
 
@@ -989,14 +1057,14 @@ def get_real_time_context(queries):
     if len(context.strip()) < 300:
         context = (
             "Limited search context was available. Write a conservative evergreen guide. "
-            "Do not include specific statistics, prices, breach costs, market sizes, laws, tax brackets, contribution limits, or dates unless clearly supported. "
-            "Use general best practices and clearly state that costs, pricing, laws, and requirements vary by provider, company size, location, and situation."
+            "Do not include specific statistics, prices, breach costs, market sizes, laws, tax brackets, contribution limits, CPCs, CPAs, ROAS, or dates unless clearly supported. "
+            "Use general best practices and clearly state that costs, pricing, laws, ad budgets, and requirements vary by provider, company size, location, and situation."
         )
 
     return context
 
 
-def build_article_prompt(today, topic, category, post_format, context, revision_notes=""):
+def build_article_prompt(today, topic, category, post_format, context, revision_notes="", forbid_dollar_amounts=False):
     revision_block = ""
 
     if revision_notes:
@@ -1006,6 +1074,23 @@ The previous draft had these issues:
 {revision_notes}
 
 Fix all of these issues in the new version.
+"""
+
+    strict_money_block = ""
+
+    if forbid_dollar_amounts:
+        strict_money_block = """
+STRICT MONEY CLAIM FIX:
+- The previous draft failed money, price, budget, or CPC validation.
+- In this revised version, do not use the "$" symbol anywhere.
+- Do not mention exact dollar amounts, CPCs, ad budgets, price ranges, or estimated costs.
+- Replace specific numbers with general wording such as:
+  "start with a small controlled test budget",
+  "set a daily cap you can afford",
+  "scale only after conversion data is stable",
+  "pricing varies by plan, billing term, and team size",
+  "check current vendor pricing".
+- For paid ads, use a budget framework instead of dollar recommendations.
 """
 
     finance_rules = ""
@@ -1021,6 +1106,23 @@ SPECIAL RULES FOR PERSONAL FINANCE AND TAX TOPICS:
 - Recommend checking current IRS guidance or speaking with a qualified tax professional for personal decisions.
 """
 
+    paid_ads_rules = ""
+
+    if is_paid_ads_topic(topic + " " + category):
+        paid_ads_rules = """
+SPECIAL RULES FOR PAID ADS, GOOGLE ADS, SHOPPING ADS, PPC, CPC, AND ROAS TOPICS:
+- Do not give exact dollar budget recommendations unless they are directly supported by official Google Ads reference data.
+- Do not mention average CPC, CPA, ROAS, or benchmark costs unless directly supported by official source data.
+- Prefer budget frameworks instead of numbers:
+  "define your break-even cost per acquisition",
+  "start with a controlled test budget",
+  "set daily caps",
+  "review search terms and product feed quality",
+  "increase spend only after conversion data is reliable".
+- Do not say a beginner should spend a specific dollar amount.
+- If the reader asks about budget, explain how to calculate a budget from margin, conversion rate, and target acquisition cost without giving made-up dollar examples.
+"""
+
     return f"""
 You are an expert SEO blog writer and editor.
 
@@ -1029,7 +1131,7 @@ Topic: "{topic}"
 Category: "{category}"
 Format: "{post_format}"
 
-Use the reference data below. Do not invent facts, prices, statistics, dates, breach costs, tool rankings, tax brackets, contribution limits, or market claims that are not supported by the reference data or stable general knowledge.
+Use the reference data below. Do not invent facts, prices, statistics, dates, breach costs, tool rankings, tax brackets, contribution limits, ad budgets, CPCs, CPAs, ROAS, or market claims that are not supported by the reference data or stable general knowledge.
 
 <REFERENCE_DATA>
 {context}
@@ -1037,7 +1139,11 @@ Use the reference data below. Do not invent facts, prices, statistics, dates, br
 
 {revision_block}
 
+{strict_money_block}
+
 {finance_rules}
+
+{paid_ads_rules}
 
 TARGET READER:
 - Write for small business owners, solo operators, lean teams, marketers, founders, and practical decision-makers.
@@ -1075,7 +1181,7 @@ SEO AND QUALITY RULES:
 12. If costs vary, say costs vary instead of inventing numbers.
 13. Use concrete decision-support language: best for, avoid if, consider if, implementation steps, budget factors.
 14. Do not overuse emojis. Use them mainly in headings.
-15. If the title mentions "cost", "pricing", or "comparison", include a cost/budget table without inventing exact prices.
+15. If the title mentions "cost", "pricing", "budget", or "comparison", include a budget/cost framework without inventing exact prices.
 16. If the article discusses products or solutions, prefer tool categories over unsupported vendor rankings.
 17. If exact pricing is not clearly visible from official vendor sources in REFERENCE_DATA, write "pricing varies by plan, billing term, and team size" or "check current vendor pricing" instead of giving numbers.
 18. Do not use approximate pricing like "~$30", "around $30", "roughly $30", "about $30", or "$30-$40".
@@ -1145,7 +1251,9 @@ Rules:
 - Avoid topics that require original hands-on testing unless the article can clearly be written as a general guide.
 - Prefer long-tail topics with clear search intent over broad head terms.
 - Avoid broad topics that would be difficult for a small blog to rank for.
-- Prefer practical, buyer-intent, comparison, checklist, cost-planning, implementation, or decision-support topics.
+- Prefer practical, buyer-intent, comparison, checklist, implementation, or decision-support topics.
+- Avoid topics that require exact dollar budget recommendations, exact CPC benchmarks, exact CPA benchmarks, or exact ROAS numbers.
+- For paid ads topics, prefer setup, checklist, feed quality, campaign structure, bidding strategy, and budget framework topics rather than dollar budget recommendation topics.
 - For personal finance topics, prefer educational planning topics and avoid topics that require personalized advice.
 - Return EXACTLY the XML format below and nothing else.
 
@@ -1204,12 +1312,17 @@ Rules:
 
     issues = validate_content_quality(title, content, context)
 
-    if issues:
-        print("⚠️ Quality issues found. Trying one revision...")
+    for revision_attempt in range(MAX_REVISION_ATTEMPTS):
+        if not issues:
+            break
+
+        print(f"⚠️ Quality issues found. Revision attempt {revision_attempt + 1}/{MAX_REVISION_ATTEMPTS}...")
+
         for issue in issues:
             print(f"- {issue}")
 
         revision_notes = "\n".join([f"- {issue}" for issue in issues])
+        forbid_dollar_amounts = has_money_related_issue(issues)
 
         revise_prompt = build_article_prompt(
             today=today,
@@ -1217,18 +1330,18 @@ Rules:
             category=category,
             post_format=post_format,
             context=context,
-            revision_notes=revision_notes
+            revision_notes=revision_notes,
+            forbid_dollar_amounts=forbid_dollar_amounts
         )
 
-        msg3 = client.messages.create(
+        msg_revision = client.messages.create(
             model=CLAUDE_MODEL,
             max_tokens=4000,
             messages=[{"role": "user", "content": revise_prompt}]
         )
 
-        response3 = msg3.content[0].text
-        title, image_prompt, description, content = parse_article_response(response3, topic)
-
+        response_revision = msg_revision.content[0].text
+        title, image_prompt, description, content = parse_article_response(response_revision, topic)
         issues = validate_content_quality(title, content, context)
 
     validation_passed = len(issues) == 0
