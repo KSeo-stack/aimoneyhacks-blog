@@ -153,11 +153,37 @@ def clean_title(title, fallback):
     return title[:120]
 
 
-def clean_html_content(content):
+def clean_html_content(content, title=""):
     if not content:
         return ""
 
+    # Blogger 제목과 중복되는 H1 제거
     content = re.sub(r"<h1.*?>.*?</h1>", "", content, flags=re.DOTALL | re.IGNORECASE)
+
+    # Claude가 CONTENT 맨 앞에 제목을 일반 텍스트나 p 태그로 다시 넣는 경우 제거
+    if title:
+        plain_title = re.escape(title.strip())
+
+        content = re.sub(
+            rf"^\s*{plain_title}\s*(<br\s*/?>)?\s*",
+            "",
+            content,
+            flags=re.IGNORECASE
+        )
+
+        content = re.sub(
+            rf"^\s*<p>\s*{plain_title}\s*</p>\s*",
+            "",
+            content,
+            flags=re.IGNORECASE
+        )
+
+        content = re.sub(
+            rf"^\s*<strong>\s*{plain_title}\s*</strong>\s*",
+            "",
+            content,
+            flags=re.IGNORECASE
+        )
 
     replacements = {
         "delve into": "look at",
@@ -212,6 +238,16 @@ def get_cta_for_category(category):
         return ""
 
     return CATEGORY_CTAS[category]
+
+
+def get_disclaimer_for_category(category):
+    if category == "Personal Finance & Investing":
+        return """
+        <div style="background:#fff7ed; border-left:4px solid #f97316; padding:16px; margin-top:32px; border-radius:8px;">
+            <p style="margin:0;"><strong>Note:</strong> This article is for educational purposes only and is not financial, tax, or legal advice. Tax rules, account rules, state taxes, and household situations can vary. Check current IRS guidance or speak with a qualified tax professional before making retirement account decisions.</p>
+        </div>
+        """
+    return ""
 
 
 def validate_title(title):
@@ -280,6 +316,18 @@ def validate_content_quality(title, content):
     if "top " in title.lower() and "solution" in title.lower():
         if "best for" not in lowered_all and "avoid if" not in lowered_all:
             issues.append("Title implies product/solution comparison, but content lacks decision-support language.")
+
+    risky_finance_phrases = [
+        "tax-free and penalty-free",
+        "completely tax-free",
+        "guaranteed",
+        "risk-free",
+        "will save you"
+    ]
+
+    for phrase in risky_finance_phrases:
+        if phrase in lowered_all:
+            issues.append(f"Risky finance wording found: {phrase}")
 
     issues.extend(validate_title(title))
 
@@ -424,6 +472,19 @@ The previous draft had these issues:
 Fix all of these issues in the new version.
 """
 
+    finance_rules = ""
+
+    if category == "Personal Finance & Investing":
+        finance_rules = """
+SPECIAL RULES FOR PERSONAL FINANCE AND TAX TOPICS:
+- Avoid specific bracket thresholds, contribution limits, tax calculations, or account limits unless directly supported by the reference data.
+- If discussing tax brackets, clearly distinguish taxable income from gross income.
+- Use cautious wording such as "generally", "may", "can vary", and "depending on your situation".
+- Do not say "tax-free and penalty-free" without clarifying whether you mean converted principal, contributions, or earnings.
+- Do not present financial, tax, or retirement strategies as advice.
+- Recommend checking current IRS guidance or speaking with a qualified tax professional for personal decisions.
+"""
+
     return f"""
 You are an expert SEO blog writer and editor.
 
@@ -432,7 +493,7 @@ Topic: "{topic}"
 Category: "{category}"
 Format: "{post_format}"
 
-Use the reference data below. Do not invent facts, prices, statistics, dates, breach costs, tool rankings, or market claims that are not supported by the reference data or stable general knowledge.
+Use the reference data below. Do not invent facts, prices, statistics, dates, breach costs, tool rankings, tax brackets, contribution limits, or market claims that are not supported by the reference data or stable general knowledge.
 
 <REFERENCE_DATA>
 {context}
@@ -440,13 +501,16 @@ Use the reference data below. Do not invent facts, prices, statistics, dates, br
 
 {revision_block}
 
+{finance_rules}
+
 TARGET READER:
 - Write for small business owners, solo operators, lean teams, marketers, founders, and practical decision-makers.
+- For personal finance topics, write for general educational readers, not as a financial adviser.
 - Do not write like an enterprise consultant unless the topic clearly requires it.
 - Explain technical concepts in plain English without dumbing them down.
 
 ARTICLE STRUCTURE:
-1. Do NOT repeat the post title as an H1. Blogger already displays the title.
+1. Do NOT repeat the post title as an H1 or plain text. Blogger already displays the title.
 2. Start immediately with a helpful "💡 Quick Summary" box using an HTML div with light blue background.
 3. The Quick Summary must answer the reader's core question in 4-6 bullet points.
 4. After the summary, write a short intro of 2-3 paragraphs.
@@ -477,9 +541,8 @@ SEO AND QUALITY RULES:
 14. Do not overuse emojis. Use them mainly in headings.
 15. If the title mentions "cost", "pricing", or "comparison", include a cost/budget table without inventing exact prices.
 16. If the article discusses products or solutions, prefer tool categories over unsupported vendor rankings.
-17. No medical, legal, or financial advice disclaimers unless relevant; keep wording practical and careful.
-18. <DESCRIPTION> must be under 160 characters.
-19. <IMAGE_PROMPT> must describe a minimalist, matte digital art piece for this topic. No faces. No text. No logos.
+17. <DESCRIPTION> must be under 160 characters.
+18. <IMAGE_PROMPT> must describe a minimalist, matte digital art piece for this topic. No faces. No text. No logos.
 
 Return EXACTLY the XML format below and nothing else.
 
@@ -504,7 +567,7 @@ def parse_article_response(response_text, topic):
         raise ValueError("Claude response missing CONTENT tag. Refusing to publish broken post.")
 
     title = clean_title(title, f"{topic} in 2026")
-    content = clean_html_content(content)
+    content = clean_html_content(content, title)
     description = description[:160]
 
     return title, image_prompt, description, content
@@ -542,6 +605,7 @@ Rules:
 - Prefer long-tail topics with clear search intent over broad head terms.
 - Avoid broad topics that would be difficult for a small blog to rank for.
 - Prefer practical, buyer-intent, comparison, checklist, cost-planning, implementation, or decision-support topics.
+- For personal finance topics, prefer educational planning topics and avoid topics that require personalized advice.
 - Return EXACTLY the XML format below and nothing else.
 
 <TOPIC>specific topic</TOPIC>
@@ -640,13 +704,15 @@ Rules:
     </div>
     """
 
+    disclaimer = get_disclaimer_for_category(category)
     cta = get_cta_for_category(category)
 
-    final_content = header_image + content + cta
+    final_content = header_image + content + disclaimer + cta
 
     print(f"Generated title: {title}")
     print(f"Meta description: {description}")
     print(f"Word count: {count_words_from_html(content)}")
+    print(f"Disclaimer inserted: {'Yes' if disclaimer else 'No'}")
     print(f"CTA inserted: {'Yes' if cta else 'No'}")
 
     return title, final_content, description, category
