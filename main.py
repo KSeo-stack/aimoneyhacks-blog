@@ -1,45 +1,48 @@
-import anthropic
-import datetime
-import html
-import json
 import os
-import random
 import re
+import json
 import time
-import urllib.parse
+import random
+import html
 import warnings
-
+import datetime
 from pathlib import Path
+from typing import List, Tuple, Optional
+
 import requests
-from ddgs import DDGS
+import anthropic
+from duckduckgo_search import DDGS
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
+
+# ==========================================
+# 0. 설정
+# ==========================================
 warnings.filterwarnings("ignore")
 
-CLAUDE_API_KEY = os.environ.get("CLAUDE_API_KEY")
-PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY")
-BLOGGER_CLIENT_ID = os.environ.get("BLOGGER_CLIENT_ID")
-BLOGGER_CLIENT_SECRET = os.environ.get("BLOGGER_CLIENT_SECRET")
-BLOGGER_REFRESH_TOKEN = os.environ.get("BLOGGER_REFRESH_TOKEN")
-BLOG_ID = os.environ.get("BLOG_ID")
+CLAUDE_API_KEY = os.environ.get("CLAUDE_API_KEY", "").strip()
+CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "").strip() or "claude-sonnet-4-6"
 
-CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL") or "claude-sonnet-4-6"
+BLOGGER_CLIENT_ID = os.environ.get("BLOGGER_CLIENT_ID", "").strip()
+BLOGGER_CLIENT_SECRET = os.environ.get("BLOGGER_CLIENT_SECRET", "").strip()
+BLOGGER_REFRESH_TOKEN = os.environ.get("BLOGGER_REFRESH_TOKEN", "").strip()
+BLOG_ID = os.environ.get("BLOG_ID", "").strip()
 
-DRAFT_MODE = os.environ.get("DRAFT_MODE", "true").lower() == "true"
-HIGH_RISK_DRAFT_MODE = os.environ.get("HIGH_RISK_DRAFT_MODE", "true").lower() == "true"
+PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY", "").strip()
 
-CTA_INSERT_RATE = 0.60
-MAX_SEARCH_QUERIES = 10
-MAX_REVISION_ATTEMPTS = 2
+DRAFT_MODE = os.environ.get("DRAFT_MODE", "true").strip().lower() in ("1", "true", "yes", "y")
+
+BACKUP_DIR = Path("draft_backups")
+BACKUP_DIR.mkdir(parents=True, exist_ok=True)
 
 CATEGORIES = [
     "Personal Finance & Investing",
     "B2B Software & SaaS Tools",
     "Cybersecurity & Online Privacy",
     "Digital Marketing & E-commerce",
-    "Remote Work & Productivity Hacks"
+    "Remote Work & Productivity Hacks",
 ]
 
 FORMATS = [
@@ -48,1469 +51,855 @@ FORMATS = [
     "comparison format with pros and cons",
 ]
 
-CATEGORY_CONFIG = {
-    "Personal Finance & Investing": {
-        "label": "Personal Finance",
-        "secondary_labels": ["Investing", "Money Tips"],
-        "pexels_fallback_keywords": [
-            "finance workspace",
-            "budget planning",
-            "investment planning",
-            "financial documents"
-        ]
-    },
-    "B2B Software & SaaS Tools": {
-        "label": "SaaS",
-        "secondary_labels": ["B2B Software", "Business Tools"],
-        "pexels_fallback_keywords": [
-            "business software",
-            "crm dashboard",
-            "office laptop",
-            "business analytics"
-        ]
-    },
-    "Cybersecurity & Online Privacy": {
-        "label": "Cybersecurity",
-        "secondary_labels": ["Online Privacy", "Security Guide"],
-        "pexels_fallback_keywords": [
-            "cybersecurity",
-            "data security",
-            "password security",
-            "server room"
-        ]
-    },
-    "Digital Marketing & E-commerce": {
-        "label": "Digital Marketing",
-        "secondary_labels": ["Ecommerce", "Marketing Strategy"],
-        "pexels_fallback_keywords": [
-            "digital marketing",
-            "ecommerce business",
-            "online shopping",
-            "marketing analytics"
-        ]
-    },
-    "Remote Work & Productivity Hacks": {
-        "label": "Remote Work",
-        "secondary_labels": ["Productivity", "Work From Home"],
-        "pexels_fallback_keywords": [
-            "remote work",
-            "home office",
-            "productivity workspace",
-            "desk laptop"
-        ]
-    }
+CATEGORY_LABELS = {
+    "Personal Finance & Investing": ["Personal Finance", "Investing", "Money Tips", "2026 Guide"],
+    "B2B Software & SaaS Tools": ["B2B Software", "SaaS Tools", "Business Tech", "2026 Guide"],
+    "Cybersecurity & Online Privacy": ["Cybersecurity", "Online Privacy", "Security Guide", "2026 Guide"],
+    "Digital Marketing & E-commerce": ["Digital Marketing", "E-commerce", "Growth Tips", "2026 Guide"],
+    "Remote Work & Productivity Hacks": ["Remote Work", "Productivity", "Work Smarter", "2026 Guide"],
 }
-
-CATEGORY_CTAS = {
-    "B2B Software & SaaS Tools": """
-    <div style="background:#f0f7ff; border-left:4px solid #0066cc; padding:20px; margin-top:40px; border-radius:8px;">
-        <h3 style="color:#111827; margin-top:0;">Need Better AI Prompts for Business?</h3>
-        <p style="color:#374151;">Use 100 prompts for SaaS research, product positioning, content planning, and business workflows.</p>
-        <a href="https://cashgpt00.gumroad.com/l/izbis" style="background:#0066cc; color:white; padding:10px 20px; border-radius:6px; text-decoration:none; font-weight:bold; display:inline-block;">Get the Prompt Pack</a>
-    </div>
-    """,
-    "Digital Marketing & E-commerce": """
-    <div style="background:#f0f7ff; border-left:4px solid #0066cc; padding:20px; margin-top:40px; border-radius:8px;">
-        <h3 style="color:#111827; margin-top:0;">Want Faster Marketing Content Ideas?</h3>
-        <p style="color:#374151;">Use 100 copy-paste AI prompts for content planning, product descriptions, ads, and email campaigns.</p>
-        <a href="https://cashgpt00.gumroad.com/l/izbis" style="background:#0066cc; color:white; padding:10px 20px; border-radius:6px; text-decoration:none; font-weight:bold; display:inline-block;">Get the Prompt Pack</a>
-    </div>
-    """,
-    "Remote Work & Productivity Hacks": """
-    <div style="background:#f9fafb; border-left:4px solid #111827; padding:20px; margin-top:40px; border-radius:8px;">
-        <h3 style="color:#111827; margin-top:0;">Save Time with AI Workflows</h3>
-        <p style="color:#374151;">Get practical AI prompts for planning, writing, research, and online productivity.</p>
-        <a href="https://cashgpt00.gumroad.com/l/izbis" style="background:#111827; color:white; padding:10px 20px; border-radius:6px; text-decoration:none; font-weight:bold; display:inline-block;">View the Prompt Pack</a>
-    </div>
-    """
-}
-
-BANNED_PHRASES = [
-    "delve into",
-    "tapestry",
-    "in today's fast-paced world",
-    "game-changer",
-    "ever-evolving landscape",
-    "unlock the power",
-    "revolutionize",
-    "paradigm shift",
-    "the digital age",
-    "cutting-edge solution"
-]
-
-UNSUPPORTED_RANKING_PHRASES = [
-    "top-rated",
-    "best overall",
-    "number one",
-    "#1",
-    "leads on",
-    "industry-leading",
-    "market-leading",
-    "the leader in",
-    "leading solution"
-]
-
-RISKY_FINANCE_PHRASES = [
-    "tax-free and penalty-free",
-    "completely tax-free",
-    "guaranteed",
-    "risk-free",
-    "will save you",
-    "you should convert",
-    "you should invest"
-]
 
 HIGH_RISK_CATEGORIES = {
     "Personal Finance & Investing",
-    "Cybersecurity & Online Privacy"
+    "Cybersecurity & Online Privacy",
 }
 
-HIGH_RISK_KEYWORDS = [
-    "tax",
-    "ira",
-    "roth",
-    "401k",
-    "retirement",
-    "investing",
-    "insurance",
-    "legal",
-    "hipaa",
-    "soc 2",
-    "pricing",
-    "cost",
-    "comparison",
-    "security",
-    "compliance",
-    "breach",
-    "privacy",
-    "password manager",
-    "zero trust",
-    "google ads",
-    "shopping ads",
-    "ppc",
-    "cpc",
-    "roas",
-    "ad budget"
+BANNED_AI_PHRASES = [
+    "in today's fast-paced digital landscape",
+    "ever-evolving",
+    "delve into",
+    "game-changer",
+    "it's important to note",
+    "in conclusion",
+    "to sum up",
+    "one-size-fits-all",
+    "unlock the power of",
+    "leverage",
 ]
 
-PRICING_INTENT_KEYWORDS = [
-    "pricing",
-    "price",
-    "cost",
-    "comparison",
-    "plans",
-    "tools",
-    "software",
-    "platform",
-    "solution",
-    "password manager",
-    "saas",
-    "budget",
-    "cpc",
-    "ppc",
-    "google ads",
-    "shopping ads"
-]
-
-PAID_ADS_KEYWORDS = [
-    "google ads",
-    "shopping ads",
-    "performance max",
-    "merchant center",
-    "ppc",
-    "cpc",
-    "roas",
-    "ad budget",
-    "campaign budget",
-    "paid search",
-    "paid ads"
-]
-
-PRICING_GUESS_PATTERNS = [
+GUESS_PRICING_PATTERNS = [
     r"(?:~|approximately|approx\.?|around|roughly|about|typically|usually|estimated(?:\s+at)?|averages?)\s*\$[\d,]+(?:\.\d+)?",
     r"\$[\d,]+(?:\.\d+)?\s*(?:-|–|—|to)\s*\$?[\d,]+(?:\.\d+)?",
-    r"\$[\d,]+(?:\.\d+)?\s*(?:-|–|—|to)\s*[\d,]+(?:\.\d+)?",
-    r"low\s+double\s+digits",
-    r"mid\s+double\s+digits",
-    r"high\s+double\s+digits"
 ]
 
-OFFICIAL_SOURCE_DOMAINS = {
-    "1password.com",
-    "bitwarden.com",
-    "nordpass.com",
-    "proton.me",
-    "keepersecurity.com",
-    "roboform.com",
-    "dashlane.com",
-    "irs.gov",
-    "nist.gov",
-    "cisa.gov",
-    "ftc.gov",
-    "sec.gov",
-    "fidelity.com",
-    "schwab.com",
-    "vanguard.com",
-    "microsoft.com",
-    "google.com",
-    "support.google.com",
-    "ads.google.com",
-    "cloudflare.com",
-    "okta.com",
-    "atlassian.com",
-    "shopify.com",
-    "stripe.com",
-    "hubspot.com",
-    "salesforce.com"
-}
+
+# ==========================================
+# 1. 공용 유틸
+# ==========================================
+def log(msg: str):
+    print(msg, flush=True)
 
 
-def validate_env():
-    required_vars = {
-        "CLAUDE_API_KEY": CLAUDE_API_KEY,
-        "BLOGGER_CLIENT_ID": BLOGGER_CLIENT_ID,
-        "BLOGGER_CLIENT_SECRET": BLOGGER_CLIENT_SECRET,
-        "BLOGGER_REFRESH_TOKEN": BLOGGER_REFRESH_TOKEN,
-        "BLOG_ID": BLOG_ID,
+def sanitize_filename(text: str, max_len: int = 80) -> str:
+    text = re.sub(r"[^\w\s\-]", "", text, flags=re.UNICODE)
+    text = re.sub(r"\s+", " ", text).strip()
+    text = text[:max_len].strip()
+    return text.replace(" ", "_")
+
+
+def save_local_html_backup(title: str, content: str) -> Path:
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_title = sanitize_filename(title)
+    path = BACKUP_DIR / f"{timestamp}_{safe_title}.html"
+    path.write_text(content, encoding="utf-8")
+    log(f"✅ Local HTML backup saved: {path}")
+    return path
+
+
+def save_validation_report(title: str, issues: List[str]) -> Path:
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_title = sanitize_filename(title)
+    path = BACKUP_DIR / f"{timestamp}_{safe_title}_validation_report.json"
+    payload = {
+        "title": title,
+        "issues": issues,
+        "created_at": datetime.datetime.now().isoformat(),
     }
-
-    missing = [key for key, value in required_vars.items() if not value]
-
-    if missing:
-        raise ValueError(f"Missing required environment variables: {', '.join(missing)}")
-
-    if not PEXELS_API_KEY:
-        print("⚠️ PEXELS_API_KEY is missing. The post will be published without a header image.")
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    log(f"✅ Validation report saved: {path}")
+    return path
 
 
-def execute_google_request_with_retries(request, action_name="Google API request", max_retries=5):
-    retryable_status_codes = {429, 500, 502, 503, 504}
+def extract_tag(text: str, tag: str) -> str:
+    pattern = rf"<{tag}>(.*?)</{tag}>"
+    match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
+    if not match:
+        raise ValueError(f"Missing tag: {tag}")
+    return match.group(1).strip()
 
-    for attempt in range(max_retries):
+
+def word_count(text: str) -> int:
+    clean = re.sub(r"<[^>]+>", " ", text)
+    clean = re.sub(r"\s+", " ", clean).strip()
+    return len(clean.split())
+
+
+def with_retry(func, max_attempts=4, base_sleep=2, retriable_statuses=(429, 500, 503)):
+    last_error = None
+    for attempt in range(1, max_attempts + 1):
         try:
-            return request.execute()
-
+            return func()
         except HttpError as e:
             status = getattr(e.resp, "status", None)
-
-            if status in retryable_status_codes and attempt < max_retries - 1:
-                delay = (2 ** attempt) + random.uniform(0, 1.5)
-                print(
-                    f"⚠️ {action_name} failed with HTTP {status}. "
-                    f"Retrying in {delay:.1f}s... ({attempt + 1}/{max_retries})"
-                )
-                time.sleep(delay)
-                continue
-
-            raise
-
-
-def extract_xml(text, tag, fallback=""):
-    match = re.search(rf"<{tag}>(.*?)</{tag}>", text, re.DOTALL)
-
-    if match:
-        return match.group(1).strip()
-
-    print(f"⚠️ Missing XML tag: {tag}. Using fallback.")
-    return fallback
-
-
-def clean_title(title, fallback):
-    title = title.strip() if title else fallback
-    title = re.sub(r"\s+", " ", title)
-    return title[:120]
-
-
-def html_to_text(content):
-    text = re.sub(r"<[^>]+>", " ", content or "")
-    text = html.unescape(text)
-    text = re.sub(r"&nbsp;", " ", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
-
-
-def clean_html_content(content, title=""):
-    if not content:
-        return ""
-
-    content = re.sub(r"<h1.*?>.*?</h1>", "", content, flags=re.DOTALL | re.IGNORECASE)
-
-    if title:
-        plain_title = re.escape(title.strip())
-
-        content = re.sub(
-            rf"^\s*{plain_title}\s*(<br\s*/?>)?\s*",
-            "",
-            content,
-            flags=re.IGNORECASE
-        )
-
-        content = re.sub(
-            rf"^\s*<p>\s*{plain_title}\s*</p>\s*",
-            "",
-            content,
-            flags=re.IGNORECASE
-        )
-
-        content = re.sub(
-            rf"^\s*<strong>\s*{plain_title}\s*</strong>\s*",
-            "",
-            content,
-            flags=re.IGNORECASE
-        )
-
-    replacements = {
-        "delve into": "look at",
-        "Delve into": "Look at",
-        "in today's fast-paced world": "in 2026",
-        "In today's fast-paced world": "In 2026",
-        "ever-evolving landscape": "changing market",
-        "Ever-evolving landscape": "Changing market",
-        "game-changer": "useful option",
-        "Game-changer": "Useful option",
-        "tapestry": "mix",
-        "Tapestry": "Mix",
-        "unlock the power": "use",
-        "Unlock the power": "Use",
-        "revolutionize": "improve",
-        "Revolutionize": "Improve"
-    }
-
-    for old, new in replacements.items():
-        content = content.replace(old, new)
-
-    return content.strip()
-
-
-def count_words_from_html(content):
-    return len(html_to_text(content).split())
-
-
-def get_category_labels(category):
-    config = CATEGORY_CONFIG.get(category, {})
-    main_label = config.get("label", category)
-    secondary_labels = config.get("secondary_labels", [])
-
-    labels = [main_label] + secondary_labels[:2] + ["2026 Guide"]
-
-    unique_labels = []
-    for label in labels:
-        if label and label not in unique_labels:
-            unique_labels.append(label)
-
-    return unique_labels[:5]
-
-
-def get_cta_for_category(category):
-    if category not in CATEGORY_CTAS:
-        return ""
-
-    if random.random() > CTA_INSERT_RATE:
-        return ""
-
-    return CATEGORY_CTAS[category]
-
-
-def get_disclaimer_for_category(category):
-    if category == "Personal Finance & Investing":
-        return """
-        <div style="background:#fff7ed; border-left:4px solid #f97316; padding:16px; margin-top:32px; border-radius:8px;">
-            <p style="margin:0;"><strong>Note:</strong> This article is for educational purposes only and is not financial, tax, or legal advice. Tax rules, account rules, state taxes, and household situations can vary. Check current IRS guidance or speak with a qualified tax professional before making retirement account decisions.</p>
-        </div>
-        """
-    return ""
-
-
-def has_pricing_intent(text):
-    lowered = text.lower()
-    return any(keyword in lowered for keyword in PRICING_INTENT_KEYWORDS)
-
-
-def is_paid_ads_topic(text):
-    lowered = text.lower()
-    return any(keyword in lowered for keyword in PAID_ADS_KEYWORDS)
-
-
-def is_high_risk_post(title, category):
-    combined = f"{title} {category}".lower()
-
-    if category in HIGH_RISK_CATEGORIES:
-        return True
-
-    return any(keyword in combined for keyword in HIGH_RISK_KEYWORDS)
-
-
-def get_effective_draft_mode(title, category):
-    high_risk = is_high_risk_post(title, category)
-
-    if DRAFT_MODE:
-        return True
-
-    if HIGH_RISK_DRAFT_MODE and high_risk:
-        print("⚠️ High-risk topic detected. Forcing draft mode.")
-        return True
-
-    return False
-
-
-def get_domain(url):
-    try:
-        parsed = urllib.parse.urlparse(url)
-        domain = parsed.netloc.lower()
-        if domain.startswith("www."):
-            domain = domain[4:]
-        return domain
-    except Exception:
-        return ""
-
-
-def is_official_source_url(url):
-    domain = get_domain(url)
-
-    if not domain:
-        return False
-
-    if domain.endswith(".gov"):
-        return True
-
-    for official_domain in OFFICIAL_SOURCE_DOMAINS:
-        if domain == official_domain or domain.endswith("." + official_domain):
-            return True
-
-    return False
-
-
-def parse_reference_blocks(context):
-    blocks = []
-    current = None
-
-    for line in (context or "").splitlines():
-        line = line.strip()
-
-        if line.startswith("Title:"):
-            if current:
-                blocks.append(current)
-
-            current = {
-                "title": line.replace("Title:", "", 1).strip(),
-                "snippet": "",
-                "url": ""
-            }
-
-        elif line.startswith("Snippet:") and current:
-            current["snippet"] = line.replace("Snippet:", "", 1).strip()
-
-        elif line.startswith("URL:") and current:
-            current["url"] = line.replace("URL:", "", 1).strip()
-
-    if current:
-        blocks.append(current)
-
-    return blocks
-
-
-def extract_money_amounts(text):
-    if not text:
-        return []
-
-    pattern = r"\$(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
-    amounts = re.findall(pattern, text)
-
-    unique = []
-    for amount in amounts:
-        if amount not in unique:
-            unique.append(amount)
-
-    return unique
-
-
-def normalize_money_amount(amount):
-    return amount.replace("$", "").replace(",", "").strip()
-
-
-def analyze_money_claims_against_context(content, context):
-    content_amounts = extract_money_amounts(html_to_text(content))
-    reference_blocks = parse_reference_blocks(context)
-
-    analysis = []
-
-    for amount in content_amounts:
-        normalized_amount = normalize_money_amount(amount)
-
-        if normalized_amount in {"0", "0.00"}:
-            continue
-
-        supporting_blocks = []
-
-        for block in reference_blocks:
-            block_text = f"{block.get('title', '')} {block.get('snippet', '')}"
-            block_amounts = extract_money_amounts(block_text)
-            normalized_block_amounts = [normalize_money_amount(x) for x in block_amounts]
-
-            if normalized_amount in normalized_block_amounts:
-                supporting_blocks.append({
-                    "title": block.get("title", ""),
-                    "url": block.get("url", ""),
-                    "official": is_official_source_url(block.get("url", ""))
-                })
-
-        official_supported = any(block["official"] for block in supporting_blocks)
-
-        analysis.append({
-            "amount": amount,
-            "found_in_reference": len(supporting_blocks) > 0,
-            "official_source_supported": official_supported,
-            "supporting_sources": supporting_blocks[:3]
-        })
-
-    return analysis
-
-
-def validate_title(title):
-    issues = []
-
-    if not title or len(title.strip()) < 35:
-        issues.append("Title is too short.")
-
-    if title and len(title.strip()) > 120:
-        issues.append("Title is too long.")
-
-    overused_patterns = [
-        "ultimate guide",
-        "complete guide",
-        "everything you need",
-        "the only guide",
-        "game-changing"
-    ]
-
-    lowered = title.lower() if title else ""
-
-    for pattern in overused_patterns:
-        if pattern in lowered:
-            issues.append(f"Title uses an overused SEO phrase: {pattern}")
-
-    return issues
-
-
-def split_sentences(text):
-    if not text:
-        return []
-
-    raw_sentences = re.split(r"(?<=[.!?])\s+", text)
-    sentences = []
-
-    for sentence in raw_sentences:
-        sentence = sentence.strip()
-        if len(sentence) >= 25:
-            sentences.append(sentence)
-
-    return sentences
-
-
-def extract_numeric_claim_sentences(content):
-    text = html_to_text(content)
-    sentences = split_sentences(text)
-
-    numeric_patterns = [
-        r"\$[\d,]+(?:\.\d+)?",
-        r"\b\d+(?:\.\d+)?%",
-        r"\b20\d{2}\b",
-        r"\b\d+\s*(?:-|–|—)?\s*year\b",
-        r"\b\d+\s*users?\b",
-        r"\bup to\s+\d+",
-        r"\bSOC\s*2\b",
-        r"\bHIPAA\b",
-        r"\bSSO\b",
-        r"\bfree tier\b",
-        r"\bzero-knowledge\b",
-        r"\bCPC\b",
-        r"\bCPA\b",
-        r"\bROAS\b"
-    ]
-
-    claim_sentences = []
-
-    for sentence in sentences:
-        for pattern in numeric_patterns:
-            if re.search(pattern, sentence, re.IGNORECASE):
-                claim_sentences.append(sentence)
-                break
-
-    return claim_sentences[:40]
-
-
-def extract_pricing_claim_sentences(content):
-    text = html_to_text(content)
-    sentences = split_sentences(text)
-
-    pricing_sentences = []
-
-    for sentence in sentences:
-        if "$" in sentence or re.search(r"\bpricing\b|\bprice\b|\bcost\b|\bper user\b|\bper month\b|\bper year\b|\bbudget\b|\bCPC\b|\bCPA\b|\bROAS\b", sentence, re.IGNORECASE):
-            pricing_sentences.append(sentence)
-
-    return pricing_sentences[:30]
-
-
-def validate_pricing_patterns(content):
-    issues = []
-    text = html_to_text(content)
-
-    for pattern in PRICING_GUESS_PATTERNS:
-        if re.search(pattern, text, re.IGNORECASE):
-            issues.append(f"Guess-pricing or vague numeric pricing pattern found: {pattern}")
-
-    pricing_claims = extract_pricing_claim_sentences(content)
-
-    billing_basis_words = [
-        "/mo",
-        "/month",
-        "per month",
-        "monthly",
-        "/year",
-        "per year",
-        "annually",
-        "annual",
-        "billed",
-        "per user",
-        "per employee",
-        "per seat",
-        "up to",
-        "plan",
-        "tier",
-        "renewal",
-        "first-year",
-        "per click",
-        "cost per click",
-        "cpc",
-        "daily budget",
-        "monthly budget"
-    ]
-
-    for sentence in pricing_claims:
-        if "$" in sentence:
-            lowered = sentence.lower()
-            if not any(word in lowered for word in billing_basis_words):
-                issues.append(f"Specific price lacks billing basis: {sentence[:180]}")
-
-    return issues
-
-
-def validate_money_claims_against_context(content, context):
-    issues = []
-    money_analysis = analyze_money_claims_against_context(content, context)
-
-    for item in money_analysis:
-        amount = item["amount"]
-
-        if not item["found_in_reference"]:
-            issues.append(f"Specific dollar amount not found in reference data: {amount}")
-
-        elif not item["official_source_supported"]:
-            issues.append(f"Specific dollar amount not backed by official source: {amount}")
-
-    return issues
-
-
-def validate_unsupported_ranking_claims(content):
-    issues = []
-    text = html_to_text(content).lower()
-
-    for phrase in UNSUPPORTED_RANKING_PHRASES:
-        if phrase in text:
-            issues.append(f"Unsupported ranking/superlative phrase found: {phrase}")
-
-    return issues
-
-
-def validate_content_quality(title, content, context):
-    issues = []
-
-    if not content:
-        issues.append("Content is empty.")
-        return issues
-
-    lowered_all = f"{title} {content}".lower()
-
-    for phrase in BANNED_PHRASES:
-        if phrase in lowered_all:
-            issues.append(f"Banned or AI-cliché phrase found: {phrase}")
-
-    for phrase in RISKY_FINANCE_PHRASES:
-        if phrase in lowered_all:
-            issues.append(f"Risky finance wording found: {phrase}")
-
-    issues.extend(validate_unsupported_ranking_claims(content))
-    issues.extend(validate_pricing_patterns(content))
-    issues.extend(validate_money_claims_against_context(content, context))
-
-    word_count = count_words_from_html(content)
-
-    if word_count < 700:
-        issues.append(f"Content is too short: {word_count} words.")
-
-    if "quick summary" not in lowered_all:
-        issues.append("Missing Quick Summary section.")
-
-    has_table = "<table" in lowered_all
-    has_checklist = "checklist" in lowered_all
-
-    if not has_table and not has_checklist:
-        issues.append("Missing both comparison table and checklist.")
-
-    if "practical action plan" not in lowered_all:
-        issues.append("Missing Practical Action Plan section.")
-
-    if "common mistakes" not in lowered_all:
-        issues.append("Missing Common Mistakes section.")
-
-    if "cost comparison" in title.lower() or "cost guide" in title.lower():
-        if "cost" not in lowered_all and "budget" not in lowered_all:
-            issues.append("Title mentions cost, but content does not cover cost or budget factors.")
-
-    if "top " in title.lower() and "solution" in title.lower():
-        if "best for" not in lowered_all and "avoid if" not in lowered_all:
-            issues.append("Title implies product/solution comparison, but content lacks decision-support language.")
-
-    issues.extend(validate_title(title))
-
-    return issues
-
-
-def has_money_related_issue(issues):
-    money_keywords = [
-        "dollar",
-        "price",
-        "pricing",
-        "budget",
-        "billing",
-        "cpc",
-        "cpa",
-        "roas",
-        "$",
-        "cost"
-    ]
-
-    combined = " ".join(issues).lower()
-    return any(keyword in combined for keyword in money_keywords)
-
-
+            last_error = e
+            if status not in retriable_statuses or attempt == max_attempts:
+                raise
+            sleep_s = base_sleep * attempt
+            log(f"⚠️ Blogger API temporary error ({status}). Retry {attempt}/{max_attempts} in {sleep_s}s...")
+            time.sleep(sleep_s)
+        except requests.RequestException as e:
+            last_error = e
+            if attempt == max_attempts:
+                raise
+            sleep_s = base_sleep * attempt
+            log(f"⚠️ Network error. Retry {attempt}/{max_attempts} in {sleep_s}s...")
+            time.sleep(sleep_s)
+
+    if last_error:
+        raise last_error
+
+
+# ==========================================
+# 2. Blogger
+# ==========================================
 def get_blogger_service():
     creds = Credentials(
         token=None,
         refresh_token=BLOGGER_REFRESH_TOKEN,
         token_uri="https://oauth2.googleapis.com/token",
         client_id=BLOGGER_CLIENT_ID,
-        client_secret=BLOGGER_CLIENT_SECRET
+        client_secret=BLOGGER_CLIENT_SECRET,
     )
-
     return build("blogger", "v3", credentials=creds)
 
 
-def get_recent_posts(service):
+def get_recent_posts(service, max_results: int = 15) -> List[str]:
+    log("Fetching recent Blogger posts...")
     try:
-        print("Fetching recent Blogger posts...")
-
-        request = service.posts().list(
-            blogId=BLOG_ID,
-            maxResults=30,
-            status="LIVE"
+        response = with_retry(
+            lambda: service.posts().list(
+                blogId=BLOG_ID,
+                maxResults=max_results,
+                status="LIVE"
+            ).execute()
         )
-
-        response = execute_google_request_with_retries(
-            request,
-            action_name="Fetch recent Blogger posts"
-        )
-
         items = response.get("items", [])
-        titles = [item.get("title", "") for item in items if item.get("title")]
-
-        print(f"Fetched {len(titles)} recent titles.")
+        titles = [item.get("title", "").strip() for item in items if item.get("title")]
+        log(f"Fetched {len(titles)} recent titles.")
         return titles
-
     except Exception as e:
-        print(f"⚠️ Could not fetch recent posts: {e}")
+        log(f"⚠️ Could not fetch recent posts: {e}")
         return []
 
 
-def post_to_blogger(service, title, content, category, description, is_draft):
-    labels = get_category_labels(category)
-
+def post_to_blogger(service, title: str, content: str, labels: List[str], is_draft: bool = True):
     body = {
         "title": title,
         "content": content,
-        "labels": labels,
-        "customMetaData": description[:300] if description else ""
+        "labels": labels
     }
 
-    print(f"Publishing to Blogger... Draft mode: {is_draft}")
-    print(f"Labels: {labels}")
+    log(f"Publishing to Blogger... Draft mode: {is_draft}")
+    log(f"Labels: {labels}")
 
-    request = service.posts().insert(
-        blogId=BLOG_ID,
-        body=body,
-        isDraft=is_draft
+    result = with_retry(
+        lambda: service.posts().insert(
+            blogId=BLOG_ID,
+            body=body,
+            isDraft=is_draft
+        ).execute(),
+        max_attempts=5,
+        base_sleep=3
     )
 
-    execute_google_request_with_retries(
-        request,
-        action_name="Publish Blogger post"
-    )
-
-    print("✅ Post published successfully." if not is_draft else "✅ Draft saved successfully.")
-
-
-def build_validation_report(title, description, category, content, context, issues, validation_passed, effective_draft_mode):
-    numeric_claims = extract_numeric_claim_sentences(content)
-    pricing_claims = extract_pricing_claim_sentences(content)
-    money_analysis = analyze_money_claims_against_context(content, context)
-
-    has_quick_summary = "quick summary" in f"{title} {content}".lower()
-    has_table = "<table" in content.lower()
-    has_checklist = "checklist" in content.lower()
-    has_action_plan = "practical action plan" in f"{title} {content}".lower()
-    high_risk = is_high_risk_post(title, category)
-
-    unsupported_money_amounts = [
-        item for item in money_analysis
-        if not item["found_in_reference"] or not item["official_source_supported"]
-    ]
-
-    if issues:
-        risk_level = "high"
-    elif high_risk or len(numeric_claims) >= 8:
-        risk_level = "medium"
+    if is_draft:
+        log("✅ Draft saved successfully.")
     else:
-        risk_level = "low"
-
-    return {
-        "title": title,
-        "description": description,
-        "category": category,
-        "word_count": count_words_from_html(content),
-        "has_quick_summary": has_quick_summary,
-        "has_table": has_table,
-        "has_checklist": has_checklist,
-        "has_practical_action_plan": has_action_plan,
-        "numeric_claims_found": len(numeric_claims),
-        "pricing_claims_found": len(pricing_claims),
-        "numeric_claim_sentences": numeric_claims,
-        "pricing_claim_sentences": pricing_claims,
-        "money_claim_analysis": money_analysis,
-        "unsupported_money_amounts": unsupported_money_amounts,
-        "risk_issues": issues,
-        "risk_level": risk_level,
-        "high_risk_post": high_risk,
-        "validation_passed": validation_passed,
-        "effective_draft_mode": effective_draft_mode,
-        "publish_allowed": validation_passed and not effective_draft_mode,
-        "generated_at": datetime.datetime.now().isoformat()
-    }
+        log("✅ Post published successfully.")
+    return result
 
 
-def save_local_backup(title, content, description, category, validation_report):
-    backup_dir = Path("draft_backups")
-    backup_dir.mkdir(exist_ok=True)
+# ==========================================
+# 3. 검색 / 참고 데이터
+# ==========================================
+def get_real_time_context(queries: List[str], max_results: int = 4) -> str:
+    context_blocks = []
 
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe_title = re.sub(r'[\\/*?:"<>|]', "", title)[:60]
+    try:
+        with DDGS() as ddgs:
+            for q in queries:
+                log(f"Searching: {q}")
+                try:
+                    results = list(ddgs.text(q, max_results=max_results))
+                except Exception:
+                    results = []
 
-    html_path = backup_dir / f"{timestamp}_{safe_title}.html"
-    json_path = backup_dir / f"{timestamp}_{safe_title}_validation_report.json"
+                for r in results:
+                    title = r.get("title", "").strip()
+                    body = r.get("body", "").strip()
+                    href = r.get("href", "").strip()
 
-    html_content = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<title>{html.escape(title)}</title>
-<meta name="description" content="{html.escape(description or '')}">
-</head>
-<body>
-<h1>{html.escape(title)}</h1>
-<p><strong>Category:</strong> {html.escape(category)}</p>
-<hr>
-{content}
-</body>
-</html>
-"""
+                    if title or body:
+                        context_blocks.append(
+                            f"Source Title: {title}\n"
+                            f"Snippet: {body}\n"
+                            f"URL: {href}\n"
+                        )
+    except Exception as e:
+        log(f"⚠️ Search failed: {e}")
 
-    html_path.write_text(html_content, encoding="utf-8")
-    json_path.write_text(
-        json.dumps(validation_report, ensure_ascii=False, indent=2),
-        encoding="utf-8"
-    )
+    if not context_blocks:
+        return "No fresh reference data retrieved. Use broadly accepted, non-speculative information and avoid exact pricing unless clearly established."
 
-    print(f"✅ Local HTML backup saved: {html_path}")
-    print(f"✅ Validation report saved: {json_path}")
-
-    return html_path, json_path
+    return "\n---\n".join(context_blocks[:12])
 
 
-def clean_pexels_keyword(keyword, category):
-    keyword = (keyword or "").strip()
-    keyword = re.sub(r"[^a-zA-Z0-9\s-]", " ", keyword)
-    keyword = re.sub(r"\s+", " ", keyword).strip()
+# ==========================================
+# 4. Pexels 이미지
+# ==========================================
+def topic_to_image_query(topic: str, category: str) -> str:
+    topic_lower = topic.lower()
 
-    if len(keyword.split()) > 5:
-        keyword = " ".join(keyword.split()[:5])
+    if "dividend" in topic_lower:
+        return "dividend investing finance"
+    if "crm" in topic_lower:
+        return "crm sales dashboard business"
+    if "password manager" in topic_lower:
+        return "cybersecurity password laptop"
+    if "google shopping" in topic_lower:
+        return "ecommerce online store marketing"
+    if "remote work" in topic_lower or "productivity" in topic_lower:
+        return "remote work productivity desk"
 
-    if not keyword:
-        fallback_keywords = CATEGORY_CONFIG.get(category, {}).get("pexels_fallback_keywords", ["business workspace"])
-        keyword = fallback_keywords[0]
+    if category == "Personal Finance & Investing":
+        return "personal finance investing"
+    if category == "B2B Software & SaaS Tools":
+        return "saas software business dashboard"
+    if category == "Cybersecurity & Online Privacy":
+        return "cybersecurity privacy laptop"
+    if category == "Digital Marketing & E-commerce":
+        return "digital marketing ecommerce"
+    if category == "Remote Work & Productivity Hacks":
+        return "productivity workspace"
 
-    return keyword
+    return topic
 
 
-def get_pexels_image(image_keyword, category):
+def get_pexels_image(search_query: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     if not PEXELS_API_KEY:
-        return None
+        log("⚠️ PEXELS_API_KEY not found. Skipping hero image.")
+        return None, None, None
 
-    fallback_keywords = CATEGORY_CONFIG.get(category, {}).get("pexels_fallback_keywords", ["business workspace"])
-    search_keywords = dedupe_preserve_order([clean_pexels_keyword(image_keyword, category)] + fallback_keywords)
-
-    headers = {
-        "Authorization": PEXELS_API_KEY
+    url = "https://api.pexels.com/v1/search"
+    headers = {"Authorization": PEXELS_API_KEY}
+    params = {
+        "query": search_query,
+        "per_page": 10,
+        "orientation": "landscape"
     }
 
-    for keyword in search_keywords:
-        try:
-            print(f"Searching Pexels image: {keyword}")
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=20)
+        response.raise_for_status()
+        data = response.json()
+        photos = data.get("photos", [])
 
-            response = requests.get(
-                "https://api.pexels.com/v1/search",
-                params={
-                    "query": keyword,
-                    "per_page": 8,
-                    "orientation": "landscape"
-                },
-                headers=headers,
-                timeout=15
-            )
+        if not photos:
+            log("⚠️ No Pexels image found.")
+            return None, None, None
 
-            if response.status_code != 200:
-                print(f"⚠️ Pexels request failed for '{keyword}': HTTP {response.status_code}")
-                continue
+        chosen = photos[0]
+        src = chosen.get("src", {})
+        image_url = src.get("large2x") or src.get("large") or src.get("original")
+        photographer = chosen.get("photographer")
+        photo_page = chosen.get("url")
 
-            data = response.json()
-            photos = data.get("photos", [])
-
-            if not photos:
-                continue
-
-            selected_photo = random.choice(photos[:5])
-
-            return {
-                "image_url": selected_photo["src"].get("large2x") or selected_photo["src"].get("large"),
-                "photographer": selected_photo.get("photographer", "Pexels Creator"),
-                "photographer_url": selected_photo.get("photographer_url", ""),
-                "pexels_url": selected_photo.get("url", ""),
-                "keyword": keyword
-            }
-
-        except Exception as e:
-            print(f"⚠️ Pexels image fetch failed for '{keyword}': {e}")
-
-    return None
+        return image_url, photographer, photo_page
+    except Exception as e:
+        log(f"⚠️ Pexels fetch failed: {e}")
+        return None, None, None
 
 
-def build_header_image_html(title, image_keyword, category):
-    image_data = get_pexels_image(image_keyword, category)
+def build_header_image_html(title: str, topic: str, category: str) -> str:
+    search_query = topic_to_image_query(topic, category)
+    image_url, photographer, photo_page = get_pexels_image(search_query)
 
-    if not image_data:
-        print("⚠️ No Pexels image found. Continuing without header image.")
+    if not image_url:
         return ""
 
-    safe_alt = html.escape(title, quote=True)
-    safe_image_url = html.escape(image_data["image_url"], quote=True)
-    safe_photographer = html.escape(image_data["photographer"])
-    safe_photographer_url = html.escape(image_data["photographer_url"], quote=True)
-    safe_pexels_url = html.escape(image_data["pexels_url"], quote=True)
+    alt_text = html.escape(title)
+    photographer_html = html.escape(photographer or "Unknown")
+    photo_page_html = html.escape(photo_page or "https://www.pexels.com/")
 
     return f"""
-    <div style="margin-bottom:30px;">
-        <img src="{safe_image_url}" style="width:100%; border-radius:8px;" alt="{safe_alt}"/>
-        <p style="font-size:12px; color:#6b7280; margin-top:8px;">
-            Photo by <a href="{safe_photographer_url}" target="_blank" rel="noopener">{safe_photographer}</a> on
-            <a href="{safe_pexels_url}" target="_blank" rel="noopener">Pexels</a>
+    <div style="margin: 0 0 28px 0;">
+        <img src="{image_url}" alt="{alt_text}" style="width:100%; border-radius:18px; display:block;" />
+        <p style="margin:14px 0 0 0; font-size:15px; line-height:1.6; color:#9ca3af;">
+            Photo by <a href="{photo_page_html}" target="_blank" rel="noopener" style="color:#d9f99d; text-decoration:none;">{photographer_html}</a> on
+            <a href="https://www.pexels.com/" target="_blank" rel="noopener" style="color:#d9f99d; text-decoration:none;">Pexels</a>
         </p>
     </div>
     """
 
 
-def dedupe_preserve_order(items):
-    seen = set()
-    result = []
-
-    for item in items:
-        normalized = item.strip().lower()
-        if normalized and normalized not in seen:
-            seen.add(normalized)
-            result.append(item.strip())
-
-    return result
-
-
-def build_search_queries(topic, query1, query2, category):
-    queries = [query1, query2]
-    combined = f"{topic} {query1} {query2} {category}".lower()
-
-    if has_pricing_intent(combined):
-        queries.extend([
-            f"{topic} official pricing",
-            f"{topic} pricing plans",
-            f"{query1} pricing",
-            f"{query2} cost",
-            f"{topic} vendor pricing page"
-        ])
-
-    if "password manager" in combined:
-        queries.extend([
-            "site:1password.com pricing teams",
-            "site:bitwarden.com pricing business",
-            "site:nordpass.com business pricing",
-            "site:proton.me pass business pricing",
-            "site:keepersecurity.com business pricing",
-            "site:roboform.com pricing business",
-            "site:dashlane.com business pricing"
-        ])
-
-    if any(keyword in combined for keyword in ["roth", "ira", "401k", "tax", "retirement"]):
-        queries.extend([
-            f"site:irs.gov {topic}",
-            "site:irs.gov Roth IRA conversion five year rule",
-            "site:irs.gov federal income tax brackets 2026"
-        ])
-
-    if any(keyword in combined for keyword in ["zero trust", "cybersecurity", "security", "compliance"]):
-        queries.extend([
-            f"site:nist.gov {topic}",
-            f"site:cisa.gov {topic}",
-            f"{topic} official guidance"
-        ])
-
-    if is_paid_ads_topic(combined):
-        queries.extend([
-            "site:support.google.com/google-ads shopping campaigns setup",
-            "site:support.google.com/google-ads campaign budgets",
-            "site:support.google.com/google-ads bidding strategy shopping campaigns",
-            "site:ads.google.com google shopping ads",
-            f"{topic} Google Ads official help"
-        ])
-
-    return dedupe_preserve_order(queries)[:MAX_SEARCH_QUERIES]
+# ==========================================
+# 5. HTML 후처리 (박스/표 스타일)
+# ==========================================
+def merge_inline_style(tag_html: str, extra_style: str) -> str:
+    if 'style="' in tag_html:
+        return re.sub(
+            r'style="([^"]*)"',
+            lambda m: f'style="{m.group(1).rstrip(";")}; {extra_style}"',
+            tag_html,
+            count=1,
+            flags=re.IGNORECASE
+        )
+    return tag_html[:-1] + f' style="{extra_style}">'
 
 
-def get_real_time_context(queries):
-    context = ""
+def force_text_color_in_block(block_html: str, color: str = "#111827") -> str:
+    tags = ["h2", "h3", "h4", "p", "li", "span", "strong", "em", "ul", "ol", "a"]
+    pattern = re.compile(
+        rf"<({'|'.join(tags)})\b([^>]*)>",
+        re.IGNORECASE
+    )
 
-    try:
-        with DDGS() as ddgs:
-            for query in queries:
-                print(f"Searching: {query}")
+    def repl(match):
+        tag = match.group(1)
+        attrs = match.group(2) or ""
+        original = f"<{tag}{attrs}>"
 
-                try:
-                    results = list(
-                        ddgs.text(
-                            query,
-                            max_results=4,
-                            timelimit="m"
-                        )
-                    )
-                except Exception as e:
-                    print(f"⚠️ Search with timelimit failed. Retrying without timelimit: {e}")
-                    results = list(
-                        ddgs.text(
-                            query,
-                            max_results=4
-                        )
-                    )
+        if tag.lower() == "a":
+            style = "color:#1d4ed8 !important;"
+        else:
+            style = f"color:{color} !important;"
 
-                context += f"\n--- Search results for: {query} ---\n"
+        return merge_inline_style(original, style)
 
-                for result in results:
-                    context += f"Title: {result.get('title')}\n"
-                    context += f"Snippet: {result.get('body')}\n"
-                    context += f"URL: {result.get('href')}\n\n"
+    return pattern.sub(repl, block_html)
 
-    except Exception as e:
-        print(f"⚠️ Web search failed: {e}")
-        context = ""
 
-    if len(context.strip()) < 300:
-        context = (
-            "Limited search context was available. Write a conservative evergreen guide. "
-            "Do not include specific statistics, prices, breach costs, market sizes, laws, tax brackets, contribution limits, CPCs, CPAs, ROAS, or dates unless clearly supported. "
-            "Use general best practices and clearly state that costs, pricing, laws, ad budgets, and requirements vary by provider, company size, location, and situation."
+def restyle_special_boxes(content: str) -> str:
+    quick_pattern = re.compile(
+        r"<div\b[^>]*>.*?(Quick Summary|💡\s*Quick Summary).*?</div>",
+        re.IGNORECASE | re.DOTALL
+    )
+
+    def quick_repl(match):
+        block = match.group(0)
+        block = re.sub(
+            r"<div\b[^>]*>",
+            (
+                '<div style="background:#eff6ff !important; '
+                'border-left:4px solid #3b82f6 !important; '
+                'padding:22px !important; '
+                'margin:24px 0 !important; '
+                'border-radius:16px !important; '
+                'color:#111827 !important;">'
+            ),
+            block,
+            count=1,
+            flags=re.IGNORECASE
+        )
+        block = force_text_color_in_block(block, "#111827")
+        return block
+
+    content = quick_pattern.sub(quick_repl, content)
+
+    note_pattern = re.compile(
+        r"<div\b[^>]*>.*?(Note:|educational purposes only|not financial, tax, or legal advice).*?</div>",
+        re.IGNORECASE | re.DOTALL
+    )
+
+    def note_repl(match):
+        block = match.group(0)
+        block = re.sub(
+            r"<div\b[^>]*>",
+            (
+                '<div style="background:#fff7ed !important; '
+                'border-left:4px solid #f97316 !important; '
+                'padding:22px !important; '
+                'margin:28px 0 !important; '
+                'border-radius:16px !important; '
+                'color:#111827 !important;">'
+            ),
+            block,
+            count=1,
+            flags=re.IGNORECASE
+        )
+        block = force_text_color_in_block(block, "#111827")
+        return block
+
+    content = note_pattern.sub(note_repl, content)
+
+    return content
+
+
+def style_tables(content: str) -> str:
+    table_pattern = re.compile(r"<table\b.*?</table>", re.IGNORECASE | re.DOTALL)
+
+    def table_repl(match):
+        table_html = match.group(0)
+
+        table_html = re.sub(
+            r"<table\b[^>]*>",
+            (
+                '<div style="overflow-x:auto; '
+                '-webkit-overflow-scrolling:touch; '
+                'margin:24px 0;">'
+                '<table style="min-width:720px; '
+                'width:100%; '
+                'border-collapse:collapse; '
+                'table-layout:auto; '
+                'background:#ffffff !important; '
+                'color:#111827 !important; '
+                'border:1px solid #d1d5db; '
+                'font-size:16px; '
+                'line-height:1.6;">'
+            ),
+            table_html,
+            count=1,
+            flags=re.IGNORECASE
         )
 
-    return context
+        table_html = re.sub(
+            r"</table>",
+            "</table></div>",
+            table_html,
+            count=1,
+            flags=re.IGNORECASE
+        )
+
+        table_html = re.sub(
+            r"<th\b([^>]*)>",
+            (
+                '<th style="background:#e5e7eb !important; '
+                'color:#111827 !important; '
+                'border:1px solid #cbd5e1 !important; '
+                'padding:14px 16px !important; '
+                'text-align:left !important; '
+                'vertical-align:top !important; '
+                'font-weight:700 !important; '
+                'min-width:160px !important; '
+                'white-space:normal !important; '
+                'word-break:keep-all !important; '
+                'overflow-wrap:break-word !important;">'
+            ),
+            table_html,
+            flags=re.IGNORECASE
+        )
+
+        table_html = re.sub(
+            r"<td\b([^>]*)>",
+            (
+                '<td style="background:#ffffff !important; '
+                'color:#111827 !important; '
+                'border:1px solid #d1d5db !important; '
+                'padding:14px 16px !important; '
+                'text-align:left !important; '
+                'vertical-align:top !important; '
+                'white-space:normal !important; '
+                'word-break:normal !important; '
+                'overflow-wrap:break-word !important;">'
+            ),
+            table_html,
+            flags=re.IGNORECASE
+        )
+
+        table_html = re.sub(
+            r"<tr\b([^>]*)>",
+            "<tr>",
+            table_html,
+            flags=re.IGNORECASE
+        )
+
+        return table_html
+
+    return table_pattern.sub(table_repl, content)
 
 
-def build_article_prompt(today, topic, category, post_format, context, revision_notes="", forbid_dollar_amounts=False):
-    revision_block = ""
+def post_process_html(content: str) -> str:
+    content = restyle_special_boxes(content)
+    content = style_tables(content)
+    return content
 
-    if revision_notes:
-        revision_block = f"""
-REVISION NOTES:
-The previous draft had these issues:
-{revision_notes}
 
-Fix all of these issues in the new version.
-"""
+# ==========================================
+# 6. CTA / Disclaimer / Labels
+# ==========================================
+def should_insert_cta(title: str, category: str, content: str) -> bool:
+    haystack = f"{title} {category} {re.sub(r'<[^>]+>', ' ', content)}".lower()
 
-    strict_money_block = ""
+    related_keywords = [
+        "ai",
+        "automation",
+        "prompt",
+        "saas",
+        "workflow",
+        "content",
+        "marketing",
+        "productivity",
+        "e-commerce",
+        "business",
+        "crm",
+    ]
+    return any(k in haystack for k in related_keywords)
 
-    if forbid_dollar_amounts:
-        strict_money_block = """
-STRICT MONEY CLAIM FIX:
-- The previous draft failed money, price, budget, or CPC validation.
-- In this revised version, do not use the "$" symbol anywhere.
-- Do not mention exact dollar amounts, CPCs, ad budgets, price ranges, or estimated costs.
-- Replace specific numbers with general wording such as:
-  "start with a small controlled test budget",
-  "set a daily cap you can afford",
-  "scale only after conversion data is stable",
-  "pricing varies by plan, billing term, and team size",
-  "check current vendor pricing".
-- For paid ads, use a budget framework instead of dollar recommendations.
-"""
 
-    finance_rules = ""
+def build_cta_html() -> str:
+    return """
+    <div style="background:#f0f7ff; border-left:4px solid #2563eb; padding:22px; margin-top:40px; border-radius:16px;">
+        <h3 style="margin-top:0; margin-bottom:10px; color:#111827;">Need Better AI Prompts for Business?</h3>
+        <p style="margin:0 0 16px 0; color:#374151; line-height:1.7;">
+            Use 100 prompts for SaaS research, product positioning, content planning, and business workflows.
+        </p>
+        <a href="https://cashgpt00.gumroad.com/l/izbis"
+           style="display:inline-block; background:#2563eb; color:#ffffff; text-decoration:none; padding:12px 18px; border-radius:10px; font-weight:700;">
+           Get the Prompt Pack
+        </a>
+    </div>
+    """
 
+
+def needs_finance_disclaimer(category: str, title: str, content: str) -> bool:
     if category == "Personal Finance & Investing":
-        finance_rules = """
-SPECIAL RULES FOR PERSONAL FINANCE AND TAX TOPICS:
-- Avoid specific bracket thresholds, contribution limits, tax calculations, or account limits unless directly supported by the reference data.
-- If discussing tax brackets, clearly distinguish taxable income from gross income.
-- Use cautious wording such as "generally", "may", "can vary", and "depending on your situation".
-- Do not say "tax-free and penalty-free" without clarifying whether you mean converted principal, contributions, or earnings.
-- Do not present financial, tax, or retirement strategies as advice.
-- Recommend checking current IRS guidance or speaking with a qualified tax professional for personal decisions.
+        return True
+
+    haystack = f"{title} {re.sub(r'<[^>]+>', ' ', content)}".lower()
+    keywords = [
+        "invest", "dividend", "roth", "ira", "etf", "stock", "portfolio",
+        "retirement", "tax", "brokerage", "passive income"
+    ]
+    return any(k in haystack for k in keywords)
+
+
+def build_finance_disclaimer_html() -> str:
+    return """
+    <div style="background:#fff7ed; border-left:4px solid #f97316; padding:22px; margin-top:32px; border-radius:16px; color:#111827;">
+        <p style="margin:0; color:#111827; line-height:1.8;">
+            <strong>Note:</strong> This article is for educational purposes only and is not financial, tax, or legal advice.
+            Tax rules, account rules, state taxes, and household situations can vary.
+            Check current IRS guidance or speak with a qualified tax professional before making retirement account decisions.
+        </p>
+    </div>
+    """
+
+
+def build_labels(category: str, title: str, content: str) -> List[str]:
+    base = CATEGORY_LABELS.get(category, ["2026 Guide"])
+
+    text = f"{title} {re.sub(r'<[^>]+>', ' ', content)}".lower()
+
+    extras = []
+    keyword_map = {
+        "crm": "CRM",
+        "dividend": "Dividend Investing",
+        "password": "Password Managers",
+        "google shopping": "Google Ads",
+        "remote work": "Remote Work",
+        "productivity": "Productivity Tips",
+        "cybersecurity": "Cybersecurity",
+        "saas": "SaaS Tools",
+        "e-commerce": "E-commerce",
+    }
+
+    for keyword, label in keyword_map.items():
+        if keyword in text and label not in extras and label not in base:
+            extras.append(label)
+
+    labels = base + extras
+    return labels[:6]
+
+
+# ==========================================
+# 7. 품질 검증
+# ==========================================
+def validate_content_quality(title: str, content: str) -> List[str]:
+    issues = []
+
+    wc = word_count(content)
+    if wc < 900:
+        issues.append(f"Word count too low: {wc}")
+
+    title_clean = title.strip()
+    if len(title_clean) < 35:
+        issues.append("Title too short")
+
+    lowered = re.sub(r"<[^>]+>", " ", content).lower()
+
+    for phrase in BANNED_AI_PHRASES:
+        if phrase in lowered:
+            issues.append(f"Banned AI phrase found: {phrase}")
+
+    for pattern in GUESS_PRICING_PATTERNS:
+        if re.search(pattern, lowered, flags=re.IGNORECASE):
+            issues.append(f"Guess-pricing or vague numeric pricing pattern found: {pattern}")
+
+    if "<script" in content.lower():
+        issues.append("Unsafe HTML detected")
+
+    if lowered.count("quick summary") == 0:
+        issues.append("Missing Quick Summary section")
+
+    if "practical action plan" not in lowered and "action plan" not in lowered:
+        issues.append("Missing action plan section")
+
+    return issues
+
+
+# ==========================================
+# 8. AI 글 생성
+# ==========================================
+def build_topic_prompt(category: str, fmt: str, recent_titles_str: str) -> str:
+    return f"""
+You are selecting a blog topic for a US-facing blog in 2026.
+
+Category: {category}
+Format preference: {fmt}
+Avoid topics too similar to these recent titles: {recent_titles_str}
+
+Rules:
+1. Choose ONE topic only.
+2. Prefer commercially relevant, evergreen, SEO-friendly topics.
+3. The topic must be practical and genuinely useful.
+4. Avoid clickbait.
+5. Avoid exact pricing topics unless pricing can be handled carefully with "pricing varies" language.
+6. Return XML only with:
+<TOPIC>...</TOPIC>
+<QUERY1>...</QUERY1>
+<QUERY2>...</QUERY2>
 """
 
-    paid_ads_rules = ""
 
-    if is_paid_ads_topic(topic + " " + category):
-        paid_ads_rules = """
-SPECIAL RULES FOR PAID ADS, GOOGLE ADS, SHOPPING ADS, PPC, CPC, AND ROAS TOPICS:
-- Do not give exact dollar budget recommendations unless they are directly supported by official Google Ads reference data.
-- Do not mention average CPC, CPA, ROAS, or benchmark costs unless directly supported by official source data.
-- Prefer budget frameworks instead of numbers:
-  "define your break-even cost per acquisition",
-  "start with a controlled test budget",
-  "set daily caps",
-  "review search terms and product feed quality",
-  "increase spend only after conversion data is reliable".
-- Do not say a beginner should spend a specific dollar amount.
-- If the reader asks about budget, explain how to calculate a budget from margin, conversion rate, and target acquisition cost without giving made-up dollar examples.
+def build_content_prompt(topic: str, category: str, fmt: str, reference_data: str) -> str:
+    high_risk = category in HIGH_RISK_CATEGORIES
+
+    extra_rule = ""
+    if high_risk:
+        extra_rule = """
+IMPORTANT RISK RULE:
+- Do NOT invent exact prices, yields, returns, tax outcomes, or security claims.
+- If exact pricing or numbers are not clearly supported by the reference data, say: "Pricing varies by plan, billing term, and vendor."
+- For financial or tax topics, stay educational and general. Do not give personalized advice.
 """
 
     return f"""
-You are an expert SEO blog writer and editor.
+You are writing a polished blog post for a real blog called "AI Money Hacks".
 
-Today is {today}.
-Topic: "{topic}"
-Category: "{category}"
-Format: "{post_format}"
+Topic: {topic}
+Category: {category}
+Preferred format: {fmt}
 
-Use the reference data below. Do not invent facts, prices, statistics, dates, breach costs, tool rankings, tax brackets, contribution limits, ad budgets, CPCs, CPAs, ROAS, or market claims that are not supported by the reference data or stable general knowledge.
-
+Reference data:
 <REFERENCE_DATA>
-{context}
+{reference_data}
 </REFERENCE_DATA>
 
-{revision_block}
+Writing style rules:
+- Write in natural, fluent American English.
+- Sound human, clear, and modern. Do NOT sound robotic.
+- Slightly warm tone is okay, but do NOT use slang like "lol" or "ㅋㅋ".
+- Use 1-2 tasteful emojis where appropriate, not too many.
+- Get to the core point fast.
+- Use short-to-medium paragraphs for readability.
+- Add useful bold emphasis with <strong>...</strong> for important points.
+- Keep the article around 1000-1400 words.
+- No fake urgency.
+- No fake statistics.
+- No made-up prices.
+- No unsupported exact numbers.
+- No markdown. Return clean HTML inside CONTENT.
 
-{strict_money_block}
+Structure rules:
+1. <TITLE> should be SEO-friendly and natural. No excessive hype.
+2. Start CONTENT with a visible Quick Summary box:
+   - include heading "💡 Quick Summary"
+   - 5 to 6 bullet points
+3. Then a short intro.
+4. Include section "Who This Is Best For"
+5. Include 3-6 practical main sections
+6. Include either a checklist or a comparison table
+7. Include section "Common Mistakes to Avoid"
+8. End with "🚀 2026 Practical Action Plan"
+9. If relevant, include a comparison table in HTML <table> format.
+10. Avoid repeating the exact same sentence structure.
 
-{finance_rules}
+HTML formatting rules:
+- Use <h2>, <h3>, <p>, <ul>, <ol>, <li>, <table>, <tr>, <th>, <td>, <strong>.
+- Use a div box for Quick Summary.
+- Do not include full HTML document wrapper.
+- Do not include script tags.
 
-{paid_ads_rules}
+{extra_rule}
 
-TARGET READER:
-- Write for small business owners, solo operators, lean teams, marketers, founders, and practical decision-makers.
-- For personal finance topics, write for general educational readers, not as a financial adviser.
-- Do not write like an enterprise consultant unless the topic clearly requires it.
-- Explain technical concepts in plain English without dumbing them down.
-
-ARTICLE STRUCTURE:
-1. Do NOT repeat the post title as an H1 or plain text. Blogger already displays the title.
-2. Start immediately with a helpful "💡 Quick Summary" box using an HTML div with light blue background.
-3. The Quick Summary must answer the reader's core question in 4-6 bullet points.
-4. After the summary, write a short intro of 2-3 paragraphs.
-5. Include one practical section near the top: "Who This Is Best For", "When This Makes Sense", or "What to Do First".
-6. Include either a "✅ Checklist" or a "📊 Comparison Table" in the middle.
-7. Include a "Common Mistakes to Avoid" section.
-8. End with a "🚀 2026 Practical Action Plan".
-
-SEO AND QUALITY RULES:
-1. <TITLE> may include at most 1 relevant emoji only if it feels natural.
-2. Title should be clear, search-friendly, and not clickbait.
-3. Prefer long-tail topics with clear search intent over broad head terms.
-4. Avoid using the same title pattern repeatedly.
-5. Avoid overusing "Complete Guide", "Ultimate Guide", and "Best Practices".
-6. Use varied title formats such as:
-   - How to ...
-   - [Topic] Checklist
-   - [Topic] Cost Guide
-   - [Option A] vs [Option B]
-   - What Small Businesses Should Know About ...
-7. The article must be about 900-1100 words.
-8. Use clean HTML only: h2, h3, p, ul, li, table, tr, th, td, div, strong, a.
-9. Use natural, engaging native English.
-10. Avoid AI clichés like "delve into", "tapestry", "landscape", "in today's fast-paced world", "game-changer".
-11. Do not use unsupported statistics.
-12. If costs vary, say costs vary instead of inventing numbers.
-13. Use concrete decision-support language: best for, avoid if, consider if, implementation steps, budget factors.
-14. Do not overuse emojis. Use them mainly in headings.
-15. If the title mentions "cost", "pricing", "budget", or "comparison", include a budget/cost framework without inventing exact prices.
-16. If the article discusses products or solutions, prefer tool categories over unsupported vendor rankings.
-17. If exact pricing is not clearly visible from official vendor sources in REFERENCE_DATA, write "pricing varies by plan, billing term, and team size" or "check current vendor pricing" instead of giving numbers.
-18. Do not use approximate pricing like "~$30", "around $30", "roughly $30", "about $30", or "$30-$40".
-19. If you mention a specific dollar amount, include the billing basis clearly, such as per user/month, per user/year, per month for up to X users, or billed annually.
-20. Do not convert monthly prices into annual prices unless the math and billing basis are explicit in REFERENCE_DATA.
-21. Do not write "top-rated", "market-leading", "industry-leading", or "leads on" unless the ranking is explicitly supported in REFERENCE_DATA. Prefer "commonly reviewed" or "often considered".
-22. <DESCRIPTION> must be under 160 characters.
-23. <IMAGE_KEYWORD> must be 2-5 simple English words for a Pexels photo search. No brand names. No abstract AI-art phrases. Examples: "business software", "office laptop", "remote work", "marketing analytics".
-
-Return EXACTLY the XML format below and nothing else.
-
-<TITLE>catchy SEO title</TITLE>
-<IMAGE_KEYWORD>pexels search keyword</IMAGE_KEYWORD>
-<DESCRIPTION>meta description under 160 characters</DESCRIPTION>
-<CONTENT>full HTML article</CONTENT>
+Return XML only:
+<TITLE>...</TITLE>
+<META_DESCRIPTION>...</META_DESCRIPTION>
+<CONTENT>...</CONTENT>
 """
 
 
-def parse_article_response(response_text, topic):
-    title = extract_xml(response_text, "TITLE", f"{topic} in 2026")
-    image_keyword = extract_xml(response_text, "IMAGE_KEYWORD", "business workspace")
-    description = extract_xml(
-        response_text,
-        "DESCRIPTION",
-        f"A practical 2026 guide to {topic}."
-    )
-    content = extract_xml(response_text, "CONTENT", "")
+def build_revision_prompt(title: str, content: str, issues: List[str], category: str) -> str:
+    joined_issues = "\n".join(f"- {i}" for i in issues)
 
-    if not content:
-        raise ValueError("Claude response missing CONTENT tag. Refusing to publish broken post.")
+    return f"""
+Revise the following blog post so it passes quality checks.
 
-    title = clean_title(title, f"{topic} in 2026")
-    image_keyword = clean_pexels_keyword(image_keyword, "B2B Software & SaaS Tools")
-    content = clean_html_content(content, title)
-    description = description[:160]
+Category: {category}
+Current Title: {title}
 
-    return title, image_keyword, description, content
+Issues to fix:
+{joined_issues}
+
+Rules:
+- Keep the same overall topic.
+- Improve clarity and keep the article useful.
+- Remove vague or approximate pricing.
+- If pricing is uncertain, use generic wording like "Pricing varies by plan, billing term, and vendor."
+- Preserve the blog structure.
+- Keep HTML clean.
+
+Return XML only:
+<TITLE>...</TITLE>
+<META_DESCRIPTION>...</META_DESCRIPTION>
+<CONTENT>...</CONTENT>
+
+Current content:
+<CONTENT_BLOCK>
+{content}
+</CONTENT_BLOCK>
+"""
 
 
-def generate_post(recent_titles):
+def generate_post(recent_titles: List[str]) -> Tuple[str, str, str, str, bool]:
     client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
 
-    today = datetime.datetime.now().strftime("%B %d, %Y")
     category = random.choice(CATEGORIES)
-    post_format = random.choice(FORMATS)
+    fmt = random.choice(FORMATS)
+    log(f"Selected category: {category}")
+    log(f"Selected format: {fmt}")
 
     recent_titles_str = ", ".join(recent_titles) if recent_titles else "None"
 
-    print(f"Selected category: {category}")
-    print(f"Selected format: {post_format}")
-
-    step1_prompt = f"""
-You are an expert SEO strategist for an English blog.
-
-Today is {today}.
-
-Choose a HIGH-CPC, search-friendly, evergreen topic for the category:
-"{category}"
-
-Avoid these recent post titles:
-[{recent_titles_str}]
-
-Rules:
-- Pick a specific topic, not a broad category.
-- The topic must be relevant in 2026.
-- Avoid semantic duplicates, not just exact title duplicates.
-- Avoid fake trends or unsupported claims.
-- Avoid topics that require original hands-on testing unless the article can clearly be written as a general guide.
-- Prefer long-tail topics with clear search intent over broad head terms.
-- Avoid broad topics that would be difficult for a small blog to rank for.
-- Prefer practical, buyer-intent, comparison, checklist, implementation, or decision-support topics.
-- Avoid topics that require exact dollar budget recommendations, exact CPC benchmarks, exact CPA benchmarks, or exact ROAS numbers.
-- For paid ads topics, prefer setup, checklist, feed quality, campaign structure, bidding strategy, and budget framework topics rather than dollar budget recommendation topics.
-- For personal finance topics, prefer educational planning topics and avoid topics that require personalized advice.
-- Return EXACTLY the XML format below and nothing else.
-
-<TOPIC>specific topic</TOPIC>
-<QUERY1>search query 1</QUERY1>
-<QUERY2>search query 2</QUERY2>
-"""
-
-    msg1 = client.messages.create(
+    topic_resp = client.messages.create(
         model=CLAUDE_MODEL,
         max_tokens=500,
-        messages=[{"role": "user", "content": step1_prompt}]
+        messages=[{"role": "user", "content": build_topic_prompt(category, fmt, recent_titles_str)}],
     )
 
-    response1 = msg1.content[0].text
+    topic_text = topic_resp.content[0].text
+    topic = extract_tag(topic_text, "TOPIC")
+    query1 = extract_tag(topic_text, "QUERY1")
+    query2 = extract_tag(topic_text, "QUERY2")
+    log(f"Generated topic: {topic}")
 
-    topic = extract_xml(
-        response1,
-        "TOPIC",
-        f"2026 Trends in {category}"
-    )
+    reference_data = get_real_time_context([query1, query2])
 
-    query1 = extract_xml(
-        response1,
-        "QUERY1",
-        f"{category} trends 2026"
-    )
-
-    query2 = extract_xml(
-        response1,
-        "QUERY2",
-        f"{category} best practices 2026"
-    )
-
-    print(f"Generated topic: {topic}")
-
-    search_queries = build_search_queries(topic, query1, query2, category)
-    context = get_real_time_context(search_queries)
-
-    article_prompt = build_article_prompt(
-        today=today,
-        topic=topic,
-        category=category,
-        post_format=post_format,
-        context=context
-    )
-
-    msg2 = client.messages.create(
+    content_resp = client.messages.create(
         model=CLAUDE_MODEL,
         max_tokens=4000,
-        messages=[{"role": "user", "content": article_prompt}]
+        messages=[{"role": "user", "content": build_content_prompt(topic, category, fmt, reference_data)}],
     )
 
-    response2 = msg2.content[0].text
-    title, image_keyword, description, content = parse_article_response(response2, topic)
+    raw = content_resp.content[0].text
+    title = extract_tag(raw, "TITLE")
+    meta_description = extract_tag(raw, "META_DESCRIPTION")
+    content = extract_tag(raw, "CONTENT")
 
-    issues = validate_content_quality(title, content, context)
-
-    for revision_attempt in range(MAX_REVISION_ATTEMPTS):
-        if not issues:
-            break
-
-        print(f"⚠️ Quality issues found. Revision attempt {revision_attempt + 1}/{MAX_REVISION_ATTEMPTS}...")
-
-        for issue in issues:
-            print(f"- {issue}")
-
-        revision_notes = "\n".join([f"- {issue}" for issue in issues])
-        forbid_dollar_amounts = has_money_related_issue(issues)
-
-        revise_prompt = build_article_prompt(
-            today=today,
-            topic=topic,
-            category=category,
-            post_format=post_format,
-            context=context,
-            revision_notes=revision_notes,
-            forbid_dollar_amounts=forbid_dollar_amounts
-        )
-
-        msg_revision = client.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=4000,
-            messages=[{"role": "user", "content": revise_prompt}]
-        )
-
-        response_revision = msg_revision.content[0].text
-        title, image_keyword, description, content = parse_article_response(response_revision, topic)
-        issues = validate_content_quality(title, content, context)
-
+    issues = validate_content_quality(title, content)
     validation_passed = len(issues) == 0
 
     if issues:
-        print("❌ Quality issues remain after revision:")
-        for issue in issues:
-            print(f"- {issue}")
+        log("⚠️ Quality issues found. Trying one revision...")
+        for i in issues:
+            log(f"- {i}")
 
-    header_image = build_header_image_html(title, image_keyword, category)
+        revision_resp = client.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=4000,
+            messages=[{"role": "user", "content": build_revision_prompt(title, content, issues, category)}],
+        )
 
-    disclaimer = get_disclaimer_for_category(category)
-    cta = get_cta_for_category(category)
+        revised = revision_resp.content[0].text
+        title = extract_tag(revised, "TITLE")
+        meta_description = extract_tag(revised, "META_DESCRIPTION")
+        content = extract_tag(revised, "CONTENT")
 
-    final_content = header_image + content + disclaimer + cta
+        issues = validate_content_quality(title, content)
+        validation_passed = len(issues) == 0
 
-    print(f"Generated title: {title}")
-    print(f"Meta description: {description}")
-    print(f"Word count: {count_words_from_html(content)}")
-    print(f"Pexels keyword: {image_keyword}")
-    print(f"Disclaimer inserted: {'Yes' if disclaimer else 'No'}")
-    print(f"CTA inserted: {'Yes' if cta else 'No'}")
-    print(f"Validation passed: {validation_passed}")
+        if issues:
+            log("❌ Quality issues remain after revision:")
+            for i in issues:
+                log(f"- {i}")
 
-    return {
-        "title": title,
-        "content": final_content,
-        "description": description,
-        "category": category,
-        "context": context,
-        "validation_issues": issues,
-        "validation_passed": validation_passed
-    }
+    # HTML 후처리
+    content = post_process_html(content)
+
+    # 이미지
+    header_img = build_header_image_html(title, topic, category)
+
+    # disclaimer / CTA
+    disclaimer_html = build_finance_disclaimer_html() if needs_finance_disclaimer(category, title, content) else ""
+    cta_html = build_cta_html() if should_insert_cta(title, category, content) else ""
+
+    log(f"Generated title: {title}")
+    log(f"Meta description: {meta_description}")
+    log(f"Word count: {word_count(content)}")
+    log(f"Disclaimer inserted: {'Yes' if disclaimer_html else 'No'}")
+    log(f"CTA inserted: {'Yes' if cta_html else 'No'}")
+    log(f"Validation passed: {validation_passed}")
+
+    final_content = header_img + content + disclaimer_html + cta_html
+
+    return title, final_content, meta_description, category, validation_passed, issues
 
 
+# ==========================================
+# 9. 메인 실행
+# ==========================================
 if __name__ == "__main__":
     try:
-        print("🚀 Starting Automated Blog Pipeline...")
-        print(f"Using Claude model: {CLAUDE_MODEL}")
-        print(f"Draft mode from YAML: {DRAFT_MODE}")
-        print(f"High-risk draft mode: {HIGH_RISK_DRAFT_MODE}")
+        log("🚀 Starting Automated Blog Pipeline...")
+        log(f"Using Claude model: {CLAUDE_MODEL}")
+        log(f"Draft mode from YAML: {DRAFT_MODE}")
 
-        validate_env()
+        if not CLAUDE_API_KEY:
+            raise ValueError("Missing CLAUDE_API_KEY")
+        if not BLOGGER_CLIENT_ID or not BLOGGER_CLIENT_SECRET or not BLOGGER_REFRESH_TOKEN or not BLOG_ID:
+            raise ValueError("Missing Blogger credentials or BLOG_ID")
 
-        blogger_service = get_blogger_service()
-        recent_titles = get_recent_posts(blogger_service)
+        service = get_blogger_service()
+        recent_titles = get_recent_posts(service)
 
-        post = generate_post(recent_titles)
+        title, final_content, meta_description, category, validation_passed, issues = generate_post(recent_titles)
 
-        effective_draft_mode = get_effective_draft_mode(
-            title=post["title"],
-            category=post["category"]
-        )
+        # 고위험 카테고리는 강제 draft
+        high_risk_draft_mode = category in HIGH_RISK_CATEGORIES
+        final_draft_mode = DRAFT_MODE or high_risk_draft_mode
 
-        validation_report = build_validation_report(
-            title=post["title"],
-            description=post["description"],
-            category=post["category"],
-            content=post["content"],
-            context=post["context"],
-            issues=post["validation_issues"],
-            validation_passed=post["validation_passed"],
-            effective_draft_mode=effective_draft_mode
-        )
+        log(f"High-risk draft mode: {high_risk_draft_mode}")
 
-        save_local_backup(
-            title=post["title"],
-            content=post["content"],
-            description=post["description"],
-            category=post["category"],
-            validation_report=validation_report
-        )
-
-        if not post["validation_passed"]:
+        # 검증 실패 시 백업만 저장하고 중단
+        if not validation_passed:
+            save_local_html_backup(title, final_content)
+            save_validation_report(title, issues)
             raise ValueError("Final content failed quality validation. Backup and validation report were saved.")
 
+        # 발행 전 백업
+        save_local_html_backup(title, final_content)
+
+        labels = build_labels(category, title, final_content)
         post_to_blogger(
-            service=blogger_service,
-            title=post["title"],
-            content=post["content"],
-            category=post["category"],
-            description=post["description"],
-            is_draft=effective_draft_mode
+            service=service,
+            title=title,
+            content=final_content,
+            labels=labels,
+            is_draft=final_draft_mode
         )
 
-        print(f"✅ Success: {post['title']}")
+        log(f"✅ Success: {title}")
 
     except Exception as e:
-        print(f"❌ Automation failed: {e}")
+        log(f"❌ Automation failed: {e}")
+        raise
